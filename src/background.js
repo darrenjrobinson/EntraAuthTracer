@@ -79,8 +79,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
     case 'exportData':
-      // Export functionality will be implemented in Phase 4
-      sendResponse({ success: false, error: 'Export not yet implemented' });
+      // Export is handled entirely in the UI layer (ui.js doExport/buildJsonExport etc.)
+      sendResponse({ success: true });
       break;
     default:
       sendResponse({ success: false, error: 'Unknown action' });

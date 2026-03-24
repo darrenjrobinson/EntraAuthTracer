@@ -16,7 +16,22 @@
       </h1>
       <div class="controls">
         <button id="clearBtn" class="btn btn-secondary" title="Clear all requests">Clear</button>
-        <button id="exportBtn" class="btn btn-primary" title="Export traces">Export</button>
+        <div class="export-wrapper">
+          <button id="exportBtn" class="btn btn-primary" title="Export traces" aria-haspopup="true" aria-expanded="false">
+            Export <span class="export-chevron">&#9660;</span>
+          </button>
+          <div id="exportMenu" class="export-menu" role="menu" aria-label="Export format" style="display:none;">
+            <button class="export-menu-item" data-format="json" role="menuitem">
+              <span class="export-menu-icon">{ }</span> JSON
+            </button>
+            <button class="export-menu-item" data-format="markdown" role="menuitem">
+              <span class="export-menu-icon">MD</span> Markdown (.md)
+            </button>
+            <button class="export-menu-item" data-format="txt" role="menuitem">
+              <span class="export-menu-icon">TXT</span> Plain Text (.txt)
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -72,7 +87,12 @@
       <!-- Detail Panel -->
       <div id="detailPanel" class="detail-panel" style="display: none;">
         <div class="detail-header">
-          <h3 id="detailTitle">Request Details</h3>
+          <div class="detail-title-row">
+            <h3 id="detailTitle">Request Details</h3>
+            <button id="copyDetailUrlBtn" class="copy-btn" title="Copy full URL" aria-label="Copy full URL" style="display:none;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zm-4 4a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h-1v1H2V6h1V5H2a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-1h-1v1a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1z"/></svg>
+            </button>
+          </div>
           <button id="closeDetailBtn" class="btn btn-close">&times;</button>
         </div>
         
@@ -92,14 +112,14 @@
           <!-- HTTP Tab -->
           <div id="httpTab" class="tab-pane active">
             <div class="section">
-              <h4>Request</h4>
+              <div id="requestSectionHeader" class="section-header"><h4>Request</h4></div>
               <div id="requestDetails" class="details-grid">
                 <!-- Request details will be populated here -->
               </div>
             </div>
             
             <div class="section">
-              <h4>Response</h4>
+              <div id="responseSectionHeader" class="section-header"><h4>Response</h4></div>
               <div id="responseDetails" class="details-grid">
                 <!-- Response details will be populated here -->
               </div>
@@ -112,19 +132,27 @@
                 <!-- FIDO2 details will be populated here -->
               </div>
             </div>
+
+            <!-- OAuth 2.1 Section (conditional) -->
+            <div id="oauthSection" class="section" style="display: none;">
+              <div id="oauthSectionHeader" class="section-header"><h4>OAuth 2.1 Flow Analysis</h4></div>
+              <div id="oauthDetails" class="oauth-details">
+                <!-- OAuth details will be populated here -->
+              </div>
+            </div>
           </div>
 
           <!-- Parameters Tab -->
           <div id="parametersTab" class="tab-pane">
             <div class="section">
-              <h4>URL Parameters</h4>
+              <div id="urlParamsSectionHeader" class="section-header"><h4>URL Parameters</h4></div>
               <div id="urlParameters" class="parameters-grid">
                 <!-- URL parameters will be populated here -->
               </div>
             </div>
             
             <div class="section">
-              <h4>Form Data / Request Body</h4>
+              <div id="formDataSectionHeader" class="section-header"><h4>Form Data / Request Body</h4></div>
               <div id="requestBody" class="parameters-grid">
                 <!-- Request body will be populated here -->
               </div>
@@ -142,14 +170,14 @@
           <!-- SAML Tab -->
           <div id="samlTab" class="tab-pane">
             <div class="section">
-              <h4>SAML Request</h4>
+              <div id="samlRequestSectionHeader" class="section-header"><h4>SAML Request</h4></div>
               <div id="samlRequest" class="saml-content">
                 <!-- SAML request will be populated here -->
               </div>
             </div>
             
             <div class="section">
-              <h4>SAML Response</h4>
+              <div id="samlResponseSectionHeader" class="section-header"><h4>SAML Response</h4></div>
               <div id="samlResponse" class="saml-content">
                 <!-- SAML response will be populated here -->
               </div>
@@ -160,7 +188,7 @@
           <div id="entraTab" class="tab-pane">
             <!-- Summary Section -->
             <div class="section">
-              <h4>Summary</h4>
+              <div id="entraSummarySectionHeader" class="section-header"><h4>Summary</h4></div>
               <div id="entraSummary" class="entra-summary">
                 <!-- Entra summary will be populated here -->
               </div>
@@ -168,7 +196,7 @@
 
             <!-- Claims Table -->
             <div class="section">
-              <h4>JWT Claims</h4>
+              <div id="entraClaimsSectionHeader" class="section-header"><h4>JWT Claims</h4></div>
               <div id="entraClaims" class="claims-table">
                 <!-- Entra claims will be populated here -->
               </div>

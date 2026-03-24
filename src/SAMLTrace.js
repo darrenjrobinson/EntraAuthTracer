@@ -12,6 +12,7 @@
 
 import Fido2Decoder from './Fido2Decoder.js';
 import EntraClaimsDecoder from './EntraClaimsDecoder.js';
+import OAuthDecoder from './OAuthDecoder.js';
 
 class SAMLTrace {
   constructor() {
@@ -131,7 +132,7 @@ class SAMLTrace {
       error: null
     };
 
-    // Extract request body for POST requests (needed for FIDO2)
+    // Extract request body for POST requests (needed for FIDO2 and OAuth)
     if (details.requestBody && details.method === 'POST') {
       requestData.requestBody = this.extractRequestBody(details.requestBody);
     }
@@ -218,15 +219,45 @@ class SAMLTrace {
     if (path.includes('attestation')) return 'fido2_attestation';
     if (path.includes('webauthn') && path.includes('well-known')) return 'fido2_preflight';
 
-    // OAuth detection
-    if (path.includes('devicecode')) return 'device_code_initiation';
-    if (path.includes('token') && search.includes('device_code')) return 'device_code_poll';
-    if (search.includes('code_challenge')) return 'pkce_flow';
-    if (search.includes('client_credentials')) return 'client_credentials';
-    if (path.includes('authorize')) return 'oauth_authorize';
-    if (path.includes('token')) return 'oauth_token';
+    // Device code endpoint — always initiation (response is what contains device_code)
+    if (OAuthDecoder.isDeviceCodeEndpoint(path)) return 'device_code_initiation';
+
+    // For token endpoint, read the POST body grant_type for precise classification
+    if (OAuthDecoder.isTokenEndpoint(path) && details.requestBody) {
+      const bodyFlowType = OAuthDecoder.detectFlowTypeFromBody(
+        this.peekRequestBody(details.requestBody)
+      );
+      if (bodyFlowType) return bodyFlowType;
+    }
+
+    // Authorization endpoint — check for PKCE challenge in URL
+    if (OAuthDecoder.isAuthorizationEndpoint(path)) {
+      return search.includes('code_challenge') ? 'pkce_flow' : 'oauth_authorize';
+    }
+
+    // Generic token endpoint fallback
+    if (OAuthDecoder.isTokenEndpoint(path)) return 'oauth_token';
 
     return 'unknown';
+  }
+
+  /**
+   * Peek into a raw requestBody to extract formData as a lightweight object.
+   * Does NOT store the result — used only for flow type detection.
+   */
+  peekRequestBody(requestBody) {
+    if (!requestBody) return null;
+    if (requestBody.formData) {
+      return { type: 'formData', data: requestBody.formData };
+    }
+    if (requestBody.raw) {
+      try {
+        const decoder = new TextDecoder('utf-8');
+        const text = decoder.decode(requestBody.raw[0].bytes);
+        return { type: 'json', data: JSON.parse(text) };
+      } catch { /* ignore */ }
+    }
+    return null;
   }
 
   /**
@@ -241,8 +272,32 @@ class SAMLTrace {
       case 'device_code_initiation':
       case 'device_code_poll':
         this.handleDeviceCodeRequest(requestData);
+        this.handleOAuthRequest(requestData);
         break;
-      // Additional flow handling will be added in subsequent phases
+      case 'pkce_flow':
+      case 'pkce_token_exchange':
+      case 'authcode_token_exchange':
+      case 'client_credentials':
+      case 'refresh_token':
+      case 'oauth_authorize':
+      case 'oauth_token':
+        this.handleOAuthRequest(requestData);
+        break;
+    }
+  }
+
+  /**
+   * Run OAuthDecoder analysis and attach result to the request.
+   */
+  handleOAuthRequest(requestData) {
+    try {
+      const analysis = OAuthDecoder.analyzeRequest(requestData);
+      if (analysis) {
+        requestData.oauthAnalysis = analysis;
+      }
+    } catch (error) {
+      console.error('OAuth analysis error:', error);
+      requestData.oauthAnalysis = { error: `OAuth analysis failed: ${error.message}` };
     }
   }
 
@@ -298,10 +353,40 @@ class SAMLTrace {
   }
 
   /**
-   * Handle Device Code flow requests (stub - to be implemented in Phase 3)
+   * Handle Device Code flow requests — correlate initiation and poll steps
+   * by tracking the device_code token across poll requests.
    */
   handleDeviceCodeRequest(requestData) {
-    // Device code correlation will be implemented in Phase 3
+    if (requestData.flowType === 'device_code_initiation') {
+      // Record initiation time for later correlation; device_code value is only in the
+      // response body (which we cannot read in MV3), so we track by client_id + timestamp.
+      const data = requestData.requestBody
+        ? OAuthDecoder.flattenBody(requestData.requestBody)
+        : null;
+      const clientId = data ? data.client_id : 'unknown';
+      const correlationKey = `init:${clientId}:${requestData.timestamp}`;
+      requestData.deviceCodeCorrelationKey = correlationKey;
+      this.state.deviceCodeCorrelation.set(correlationKey, [requestData.id]);
+      return;
+    }
+
+    if (requestData.flowType === 'device_code_poll') {
+      // Extract the device_code value from the POST body to use as a stable correlation key
+      const data = requestData.requestBody
+        ? OAuthDecoder.flattenBody(requestData.requestBody)
+        : null;
+      const deviceCode = data && data.device_code ? data.device_code : null;
+      if (!deviceCode) return;
+
+      const key = `poll:${deviceCode}`;
+      requestData.deviceCodeCorrelationKey = key;
+
+      if (this.state.deviceCodeCorrelation.has(key)) {
+        this.state.deviceCodeCorrelation.get(key).push(requestData.id);
+      } else {
+        this.state.deviceCodeCorrelation.set(key, [requestData.id]);
+      }
+    }
   }
 
   /**

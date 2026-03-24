@@ -17,11 +17,15 @@ A Chromium-based browser extension for deep inspection of Microsoft Entra (Azure
 - **Key Type Support**: EC2 (Elliptic Curve) and RSA key types with algorithm identification
 - **Enhanced UI**: Rich FIDO2 detail display with formatted output and collapsible raw data
 
-### 🚧 Phase 3 - OAuth 2.1 Extensions (IN PROGRESS)
-- **PKCE Flow Detection**: Code challenge/verifier analysis
-- **Device Code Flow**: Full sequence correlation and timeline
-- **Client Credentials**: Machine-to-machine flow analysis
-- **Grant Type Intelligence**: Smart labeling of OAuth flows
+### ✅ Phase 3 - OAuth 2.1 Extensions (COMPLETED)
+- **PKCE Flow Detection**: Code challenge/verifier analysis with S256 compliance, RFC 7636 verifier entropy checks, and security warnings for `plain` or missing PKCE
+- **Device Code Flow**: Request correlation via `device_code` token with visual timeline in Parameters tab grouping initiation and poll requests
+- **Client Credentials**: Machine-to-machine flow analysis detecting `client_secret` vs `client_assertion` (JWT) authentication methods
+- **Grant Type Intelligence**: Smart labeling of all OAuth 2.1 grant types with OAuth 2.1 compliance flags and deprecation warnings (implicit, ROPC)
+- **Client Assertion Decoding**: JWT header+payload decoded in-browser for `client_assertion` and `private_key_jwt` without signature verification
+- **Scope Registry**: 40+ Microsoft scope URIs mapped to human-readable descriptions with full scope list display
+- **Security Warnings**: Per-flow security assessment with error/warning/info severity levels surfaced in the UI
+- **OAuthDecoder Module**: Standalone `src/OAuthDecoder.js` module (354 lines) with full test coverage in `tests/OAuthDecoder.test.js` (90 tests, 3 suites)
 
 ### 🔄 Phase 4 - Entra Claims Decoder (PLANNED)
 - **CAE Detection**: Continuous Access Evaluation badge and analysis
@@ -179,8 +183,8 @@ This is a fork of [SimpleSAMLphp SAML-tracer](https://github.com/SimpleSAMLphp/S
 
 ### Development Roadmap
 
-- [ ] **Phase 2**: Complete FIDO2 CBOR decoding with `cbor-web` integration
-- [ ] **Phase 3**: Implement OAuth 2.1 flow detection and device code correlation
+- [x] **Phase 2**: Complete FIDO2 CBOR decoding with `cbor-web` integration
+- [x] **Phase 3**: Implement OAuth 2.1 flow detection and device code correlation
 - [ ] **Phase 4**: Add comprehensive Entra JWT claims registry and CAE detection
 - [ ] **Phase 5**: Build enhanced UI with export capabilities and Fluent design
 

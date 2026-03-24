@@ -5,6 +5,7 @@
 
 import EntraClaimsDecoder from './EntraClaimsDecoder.js';
 import Fido2Decoder from './Fido2Decoder.js';
+import OAuthDecoder from './OAuthDecoder.js';
 import SamlDecoder from './SamlDecoder.js';
 
 class EntraAuthTracerUI {
@@ -32,10 +33,64 @@ class EntraAuthTracerUI {
     this.initPopupResize();
   }
 
+  // ─── Copy helpers ────────────────────────────────────────────────────────────
+
+  /**
+   * Return HTML for a small clipboard copy button storing text in a data attribute.
+   */
+  makeCopyBtn(text, tooltip = 'Copy') {
+    const safe = String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;');
+    return `<button class="copy-btn" title="${tooltip}" data-copy="${safe}" aria-label="${tooltip}">` +
+      `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">` +
+      `<path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zm-4 4a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h-1v1H2V6h1V5H2a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-1h-1v1a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1z"/>` +
+      `</svg></button>`;
+  }
+
+  /**
+   * Copy text to the clipboard, briefly flash the button green on success.
+   */
+  async copyToClipboard(text, btn) {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (btn) {
+        const orig = btn.title;
+        btn.classList.add('copied');
+        btn.title = 'Copied!';
+        setTimeout(() => { btn.classList.remove('copied'); btn.title = orig; }, 1500);
+      }
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  }
+
+  /**
+   * Update a section-header element to show the title h4 and a copy button.
+   * @param {string} id   – element ID of the .section-header div
+   * @param {string} title – heading text
+   * @param {string} copyText – text placed in the copy button
+   */
+  setSectionHeader(id, title, copyText) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = `<h4>${this.escapeHtml(title)}</h4>${this.makeCopyBtn(copyText, 'Copy ' + title)}`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
   /**
    * Bind event listeners
    */
   bindEvents() {
+    // Global copy-button delegation (works for dynamically rendered copy buttons)
+    document.getElementById('app').addEventListener('click', (e) => {
+      const btn = e.target.closest('.copy-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      this.copyToClipboard(btn.dataset.copy || '', btn);
+    });
+
     // Search and filters
     document.getElementById('searchInput').addEventListener('input', (e) => {
       this.filters.search = e.target.value;
@@ -62,9 +117,20 @@ class EntraAuthTracerUI {
       this.clearData();
     });
 
-    document.getElementById('exportBtn').addEventListener('click', () => {
-      this.exportData();
+    document.getElementById('exportBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleExportMenu();
     });
+
+    document.getElementById('exportMenu').addEventListener('click', (e) => {
+      const item = e.target.closest('.export-menu-item');
+      if (!item) return;
+      this.closeExportMenu();
+      this.doExport(item.dataset.format);
+    });
+
+    // Close export menu when clicking anywhere else
+    document.addEventListener('click', () => this.closeExportMenu());
 
     // Detail panel
     document.getElementById('closeDetailBtn').addEventListener('click', () => {
@@ -128,22 +194,305 @@ class EntraAuthTracerUI {
     }
   }
 
+  // ─── Export ──────────────────────────────────────────────────────────────────
+
+  toggleExportMenu() {
+    const menu = document.getElementById('exportMenu');
+    const btn  = document.getElementById('exportBtn');
+    const isOpen = menu.style.display !== 'none';
+    menu.style.display = isOpen ? 'none' : 'block';
+    btn.setAttribute('aria-expanded', String(!isOpen));
+  }
+
+  closeExportMenu() {
+    const menu = document.getElementById('exportMenu');
+    const btn  = document.getElementById('exportBtn');
+    menu.style.display = 'none';
+    btn.setAttribute('aria-expanded', 'false');
+  }
+
   /**
-   * Export data
+   * Export captured requests in the requested format.
+   * @param {'json'|'markdown'|'txt'} format
    */
-  async exportData() {
-    try {
-      const response = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ action: 'exportData' }, resolve);
-      });
-      
-      if (!response.success) {
-        alert('Export functionality not yet implemented');
+  doExport(format) {
+    const requests = this.currentRequests;
+    if (!requests || requests.length === 0) {
+      alert('No requests to export. Capture some authentication traffic first.');
+      return;
+    }
+
+    const now = new Date();
+    const ts  = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+
+    switch (format) {
+      case 'json': {
+        const content = this.buildJsonExport(requests, now);
+        this.downloadFile(content, `entra-auth-trace_${ts}.json`, 'application/json');
+        break;
       }
-    } catch (error) {
-      console.error('Failed to export data:', error);
+      case 'markdown': {
+        const content = this.buildMarkdownExport(requests, now);
+        this.downloadFile(content, `entra-auth-trace_${ts}.md`, 'text/markdown');
+        break;
+      }
+      case 'txt': {
+        const content = this.buildTxtExport(requests, now);
+        this.downloadFile(content, `entra-auth-trace_${ts}.txt`, 'text/plain');
+        break;
+      }
     }
   }
+
+  /**
+   * Trigger a browser file download with the given content.
+   */
+  downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }, 1000);
+  }
+
+  // ─── JSON export ─────────────────────────────────────────────────────────────
+
+  buildJsonExport(requests, now) {
+    const meta = {
+      generated_at: now.toISOString(),
+      extension_version: '1.0.0',
+      total_requests: requests.length,
+      export_scope: 'complete_session'
+    };
+
+    const exportData = {
+      export_metadata: meta,
+      requests: requests.map(r => this.requestToJsonObj(r))
+    };
+
+    return JSON.stringify(exportData, null, 2);
+  }
+
+  requestToJsonObj(r) {
+    const obj = {
+      id: r.id,
+      timestamp: new Date(r.timestamp).toISOString(),
+      method: r.method,
+      url: r.url,
+      flow_type: r.flowType,
+      status: r.status
+    };
+    if (r.statusCode) obj.status_code = r.statusCode;
+    if (r.error)      obj.error       = r.error;
+    if (r.requestHeaders && r.requestHeaders.length)  obj.request_headers  = r.requestHeaders;
+    if (r.responseHeaders && r.responseHeaders.length) obj.response_headers = r.responseHeaders;
+    if (r.requestBody)  obj.request_body  = r.requestBody;
+    if (r.responseBody) obj.response_body = r.responseBody;
+    if (r.oauthAnalysis)  obj.oauth_analysis  = r.oauthAnalysis;
+    if (r.fido2Analysis)  obj.fido2_analysis  = r.fido2Analysis;
+    if (r.samlAnalysis)   obj.saml_analysis   = r.samlAnalysis;
+    return obj;
+  }
+
+  // ─── Markdown export ─────────────────────────────────────────────────────────
+
+  buildMarkdownExport(requests, now) {
+    const lines = [];
+    lines.push('# Entra Auth Trace Report');
+    lines.push('');
+    lines.push(`**Generated:** ${now.toUTCString()}`);
+    lines.push(`**Extension:** Entra Auth Tracer v1.0.0`);
+    lines.push(`**Total Requests:** ${requests.length}`);
+    lines.push('');
+
+    // Summary table
+    const flowCounts = {};
+    const statusCounts = { completed: 0, error: 0, pending: 0 };
+    for (const r of requests) {
+      flowCounts[r.flowType] = (flowCounts[r.flowType] || 0) + 1;
+      if (r.status in statusCounts) statusCounts[r.status]++;
+    }
+    lines.push('## Session Summary');
+    lines.push('');
+    lines.push('| Metric | Value |');
+    lines.push('|---|---|');
+    lines.push(`| **Total Requests** | ${requests.length} |`);
+    lines.push(`| **Completed** | ${statusCounts.completed} |`);
+    lines.push(`| **Errors** | ${statusCounts.error} |`);
+    lines.push(`| **Pending** | ${statusCounts.pending} |`);
+    for (const [flow, count] of Object.entries(flowCounts)) {
+      lines.push(`| **${flow}** | ${count} |`);
+    }
+    lines.push('');
+
+    // Per-request details
+    lines.push('## Request Details');
+    lines.push('');
+
+    requests.forEach((r, i) => {
+      const url = (() => { try { return new URL(r.url); } catch { return { pathname: r.url, hostname: '' }; } })();
+      lines.push(`### Request ${i + 1}: ${r.method} ${url.pathname}`);
+      lines.push('');
+      lines.push('| Field | Value |');
+      lines.push('|---|---|');
+      lines.push(`| **Timestamp** | ${new Date(r.timestamp).toISOString()} |`);
+      lines.push(`| **Method** | ${r.method} |`);
+      lines.push(`| **URL** | \`${r.url}\` |`);
+      lines.push(`| **Flow Type** | ${r.flowType} |`);
+      lines.push(`| **Status** | ${r.status}${r.statusCode ? ' (' + r.statusCode + ')' : ''} |`);
+      if (r.error) lines.push(`| **Error** | ${r.error} |`);
+      lines.push('');
+
+      // OAuth analysis
+      if (r.oauthAnalysis && !r.oauthAnalysis.error) {
+        const a = r.oauthAnalysis;
+        lines.push('#### OAuth 2.1 Analysis');
+        lines.push('');
+        lines.push('| Field | Value |');
+        lines.push('|---|---|');
+        if (a.label)      lines.push(`| **Grant Type** | ${a.label} |`);
+        if (a.clientId)   lines.push(`| **Client ID** | \`${a.clientId}\` |`);
+        if (a.redirectUri) lines.push(`| **Redirect URI** | ${a.redirectUri} |`);
+        if (a.responseType) lines.push(`| **Response Type** | ${a.responseType} |`);
+        if (a.pkce)       lines.push(`| **PKCE** | ${a.pkce.codeChallengeMethod} |`);
+        if (a.scopeLabels && a.scopeLabels.length) {
+          lines.push(`| **Scopes** | ${a.scopeLabels.map(s => s.scope).join(', ')} |`);
+        }
+        if (a.warnings && a.warnings.length) {
+          lines.push('');
+          lines.push('**Security Warnings:**');
+          lines.push('');
+          for (const w of a.warnings) {
+            lines.push(`- [${w.severity.toUpperCase()}] ${w.message}`);
+          }
+        }
+        lines.push('');
+      }
+
+      // FIDO2 analysis
+      if (r.fido2Analysis && !r.fido2Analysis.error) {
+        const f = r.fido2Analysis;
+        lines.push('#### FIDO2 Analysis');
+        lines.push('');
+        if (f.clientDataJSON) {
+          const cd = f.clientDataJSON;
+          lines.push('| Field | Value |');
+          lines.push('|---|---|');
+          lines.push(`| **Type** | ${cd.type} |`);
+          lines.push(`| **Origin** | ${cd.origin} |`);
+          lines.push(`| **Cross Origin** | ${cd.crossOrigin ? 'Yes' : 'No'} |`);
+          lines.push('');
+        }
+      }
+
+      lines.push('---');
+      lines.push('');
+    });
+
+    lines.push('');
+    lines.push('*Generated by [Entra Auth Tracer](https://github.com/DarrenRobinson/EntraAuthTracer)*');
+    return lines.join('\n');
+  }
+
+  // ─── Plain text export ───────────────────────────────────────────────────────
+
+  buildTxtExport(requests, now) {
+    const lines = [];
+    const hr = '='.repeat(72);
+    const hr2 = '-'.repeat(72);
+
+    lines.push('ENTRA AUTH TRACE REPORT');
+    lines.push(hr);
+    lines.push(`Generated : ${now.toUTCString()}`);
+    lines.push(`Extension : Entra Auth Tracer v1.0.0`);
+    lines.push(`Requests  : ${requests.length}`);
+    lines.push(hr);
+    lines.push('');
+
+    requests.forEach((r, i) => {
+      const url = (() => { try { return new URL(r.url); } catch { return { pathname: r.url }; } })();
+      lines.push(`REQUEST ${i + 1} of ${requests.length}`);
+      lines.push(hr2);
+      lines.push(`Time      : ${new Date(r.timestamp).toISOString()}`);
+      lines.push(`Method    : ${r.method}`);
+      lines.push(`URL       : ${r.url}`);
+      lines.push(`Flow      : ${r.flowType}`);
+      lines.push(`Status    : ${r.status}${r.statusCode ? ' (' + r.statusCode + ')' : ''}`);
+      if (r.error) lines.push(`Error     : ${r.error}`);
+
+      if (r.requestHeaders && r.requestHeaders.length) {
+        lines.push('');
+        lines.push('Request Headers:');
+        for (const h of r.requestHeaders) {
+          lines.push(`  ${h.name}: ${h.value}`);
+        }
+      }
+
+      if (r.requestBody) {
+        lines.push('');
+        lines.push('Request Body:');
+        if (typeof r.requestBody === 'string') {
+          lines.push('  ' + r.requestBody.substring(0, 2000));
+        } else if (r.requestBody.formData) {
+          for (const [k, v] of Object.entries(r.requestBody.formData)) {
+            lines.push(`  ${k}=${Array.isArray(v) ? v[0] : v}`);
+          }
+        } else {
+          lines.push('  ' + JSON.stringify(r.requestBody).substring(0, 2000));
+        }
+      }
+
+      if (r.responseHeaders && r.responseHeaders.length) {
+        lines.push('');
+        lines.push('Response Headers:');
+        for (const h of r.responseHeaders) {
+          lines.push(`  ${h.name}: ${h.value}`);
+        }
+      }
+
+      if (r.oauthAnalysis && !r.oauthAnalysis.error) {
+        const a = r.oauthAnalysis;
+        lines.push('');
+        lines.push('OAuth 2.1 Analysis:');
+        if (a.label)       lines.push(`  Grant Type  : ${a.label}`);
+        if (a.clientId)    lines.push(`  Client ID   : ${a.clientId}`);
+        if (a.redirectUri) lines.push(`  Redirect URI: ${a.redirectUri}`);
+        if (a.pkce)        lines.push(`  PKCE        : ${a.pkce.codeChallengeMethod}`);
+        if (a.scopeLabels && a.scopeLabels.length) {
+          lines.push(`  Scopes      : ${a.scopeLabels.map(s => s.scope).join(' ')}`);
+        }
+        if (a.warnings && a.warnings.length) {
+          lines.push('  Warnings:');
+          for (const w of a.warnings) lines.push(`    [${w.severity.toUpperCase()}] ${w.message}`);
+        }
+      }
+
+      if (r.fido2Analysis && !r.fido2Analysis.error) {
+        const f = r.fido2Analysis;
+        lines.push('');
+        lines.push('FIDO2 Analysis:');
+        if (f.clientDataJSON) {
+          lines.push(`  Type        : ${f.clientDataJSON.type}`);
+          lines.push(`  Origin      : ${f.clientDataJSON.origin}`);
+        }
+      }
+
+      lines.push('');
+    });
+
+    lines.push(hr);
+    lines.push('Generated by Entra Auth Tracer');
+    return lines.join('\n');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   /**
    * Apply current filters and render.  Used by both loadData and filter change handlers.
@@ -198,7 +547,8 @@ class EntraAuthTracerUI {
     if (!flowType) return 'other';
     if (flowType.startsWith('fido2_')) return 'fido2';
     if (flowType.startsWith('device_code')) return 'device_code';
-    if (flowType.includes('oauth') || flowType.includes('pkce') || flowType.includes('token')) return 'oauth';
+    if (flowType === 'client_credentials' || flowType === 'refresh_token' ||
+        flowType.includes('oauth') || flowType.includes('pkce') || flowType.includes('authcode')) return 'oauth';
     if (flowType === 'saml' || flowType === 'wsfed') return 'saml';
     return 'other';
   }
@@ -264,7 +614,10 @@ class EntraAuthTracerUI {
       <div class="request-item" data-request-id="${request.id}">
         <span class="col-timestamp">${time}</span>
         <span class="col-method">${method}</span>
-        <span class="col-url" title="${request.url || ''}">${shortUrl || hostname}</span>
+        <span class="col-url" title="${this.escapeHtml(request.url || '')}">
+          <span class="url-text">${this.escapeHtml(shortUrl || hostname)}</span>
+          ${this.makeCopyBtn(request.url || '', 'Copy URL')}
+        </span>
         <span class="col-status status-${status}">${this.formatStatus(status)}</span>
         <span class="col-flow">
           <span class="flow-badge flow-${flowCategory}">${flowCategory.toUpperCase()}</span>
@@ -318,6 +671,13 @@ class EntraAuthTracerUI {
     const url = new URL(request.url);
     document.getElementById('detailTitle').textContent = `${request.method} ${url.pathname}`;
 
+    // Wire the header copy button to copy the full URL
+    const copyUrlBtn = document.getElementById('copyDetailUrlBtn');
+    if (copyUrlBtn) {
+      copyUrlBtn.dataset.copy = request.url;
+      copyUrlBtn.style.display = 'inline-flex';
+    }
+
     // Determine which tabs to show
     this.updateTabVisibility(request);
 
@@ -358,11 +718,9 @@ class EntraAuthTracerUI {
   isEntraRequest(request) {
     const url = new URL(request.url);
     const entraHosts = ['login.microsoftonline.com', 'sts.windows.net', 'login.live.com'];
-    
     if (entraHosts.includes(url.hostname)) return true;
-
-    // Check for JWT tokens in response
-    // This will be enhanced when JWT decoding is fully implemented
+    // Also show Entra tab if this request has oauth analysis (client_assertion JWT available)
+    if (request.oauthAnalysis && request.oauthAnalysis.clientAssertion) return true;
     return false;
   }
 
@@ -383,33 +741,298 @@ class EntraAuthTracerUI {
     const responseDetails = document.getElementById('responseDetails');
 
     // Request details
+    const requestCopyText = [
+      `URL: ${request.url}`,
+      `Method: ${request.method}`,
+      `Timestamp: ${new Date(request.timestamp).toISOString()}`,
+      `Flow Type: ${request.flowType}`,
+    ].join('\n');
+
+    this.setSectionHeader('requestSectionHeader', 'Request', requestCopyText);
+
     requestDetails.innerHTML = `
       <div class="label">URL:</div>
-      <div class="value">${request.url}</div>
+      <div class="value">${this.escapeHtml(request.url)}</div>
       <div class="label">Method:</div>
-      <div class="value">${request.method}</div>
+      <div class="value">${this.escapeHtml(request.method)}</div>
       <div class="label">Timestamp:</div>
       <div class="value">${new Date(request.timestamp).toISOString()}</div>
       <div class="label">Flow Type:</div>
-      <div class="value">${request.flowType}</div>
+      <div class="value">${this.escapeHtml(request.flowType)}</div>
     `;
 
     // Response details
+    let responseCopyText;
     if (request.statusCode) {
+      responseCopyText = `Status: ${request.statusCode} ${request.status}` +
+        (request.error ? `\nError: ${request.error}` : '');
       responseDetails.innerHTML = `
         <div class="label">Status:</div>
-        <div class="value">${request.statusCode} ${request.status}</div>
+        <div class="value">${request.statusCode} ${this.escapeHtml(request.status)}</div>
         ${request.error ? `
           <div class="label">Error:</div>
-          <div class="value">${request.error}</div>
+          <div class="value">${this.escapeHtml(request.error)}</div>
         ` : ''}
       `;
     } else {
+      responseCopyText = 'Response pending...';
       responseDetails.innerHTML = '<div class="value">Response pending...</div>';
     }
 
+    this.setSectionHeader('responseSectionHeader', 'Response', responseCopyText);
+
     // Show FIDO2 section if applicable
     this.populateFido2Section(request);
+
+    // Show OAuth section if applicable
+    this.populateOAuthSection(request);
+  }
+
+  /**
+   * Determine whether this request is an OAuth flow we can analyse.
+   */
+  isOAuthRequest(request) {
+    if (request.oauthAnalysis) return true;
+    const flowType = request.flowType || '';
+    return flowType.includes('pkce') || flowType.includes('oauth') ||
+      flowType.includes('authcode') || flowType === 'client_credentials' ||
+      flowType === 'refresh_token' || flowType.startsWith('device_code');
+  }
+
+  /**
+   * Populate the OAuth 2.1 section in the HTTP tab.
+   */
+  populateOAuthSection(request) {
+    const section  = document.getElementById('oauthSection');
+    const details  = document.getElementById('oauthDetails');
+    if (!section || !details) return;
+
+    if (!this.isOAuthRequest(request)) {
+      section.style.display = 'none';
+      return;
+    }
+
+    section.style.display = 'block';
+    const analysis = request.oauthAnalysis;
+
+    if (!analysis) {
+      this.setSectionHeader('oauthSectionHeader', 'OAuth 2.1 Flow Analysis', '');
+      details.innerHTML = '<div class="empty-state">No OAuth analysis available for this request.</div>';
+      return;
+    }
+    if (analysis.error) {
+      this.setSectionHeader('oauthSectionHeader', 'OAuth 2.1 Flow Analysis', '');
+      details.innerHTML = `<div class="error">⚠ ${this.escapeHtml(analysis.error)}</div>`;
+      return;
+    }
+
+    this.setSectionHeader('oauthSectionHeader', 'OAuth 2.1 Flow Analysis', this.buildOAuthCopyText(analysis));
+    details.innerHTML = this.renderOAuthDetails(analysis, request);
+  }
+
+  /**
+   * Build a plain-text summary of an OAuth analysis for clipboard copy.
+   */
+  buildOAuthCopyText(analysis) {
+    const lines = [];
+    if (analysis.label)            lines.push(`Grant Type: ${analysis.label}`);
+    if (analysis.clientId)         lines.push(`Client ID: ${analysis.clientId}`);
+    if (analysis.responseType)     lines.push(`Response Type: ${analysis.responseType}`);
+    if (analysis.responseMode)     lines.push(`Response Mode: ${analysis.responseMode}`);
+    if (analysis.redirectUri)      lines.push(`Redirect URI: ${analysis.redirectUri}`);
+    if (analysis.state)            lines.push(`State: ${analysis.state}`);
+    if (analysis.nonce)            lines.push(`Nonce: ${analysis.nonce}`);
+    if (analysis.prompt)           lines.push(`Prompt: ${analysis.prompt}`);
+    if (analysis.loginHint)        lines.push(`Login Hint: ${analysis.loginHint}`);
+    if (analysis.domainHint)       lines.push(`Domain Hint: ${analysis.domainHint}`);
+    if (analysis.authMethod)       lines.push(`Auth Method: ${analysis.authMethodLabel || analysis.authMethod}`);
+    if (analysis.deviceCodePrefix) lines.push(`Device Code: ${analysis.deviceCodePrefix}`);
+    if (analysis.pkce) {
+      lines.push(`PKCE Method: ${analysis.pkce.codeChallengeMethod}`);
+      if (analysis.pkce.codeChallenge) lines.push(`PKCE Challenge: ${analysis.pkce.codeChallenge}`);
+    }
+    if (analysis.pkceVerifier?.verifier) {
+      lines.push(`PKCE Verifier: ${analysis.pkceVerifier.verifier}`);
+    }
+    if (analysis.scopeLabels && analysis.scopeLabels.length) {
+      lines.push(`Scopes: ${analysis.scopeLabels.map(s => s.scope).join(' ')}`);
+    }
+    if (analysis.warnings && analysis.warnings.length) {
+      lines.push('');
+      lines.push('Warnings:');
+      analysis.warnings.forEach(w => lines.push(`  [${w.severity.toUpperCase()}] ${w.message}`));
+    }
+    return lines.join('\n');
+  }
+
+  /**
+   * Render all OAuth analysis into HTML.
+   */
+  renderOAuthDetails(analysis, request) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    let html = '';
+
+    // ── Grant type header ──────────────────────────────────────────────────
+    const grantInfo = OAuthDecoder.GRANT_TYPES[analysis.grantType] || {};
+    const isDeprecated = grantInfo.oauth21 === false;
+    html += `
+      <div class="oauth-grant-header">
+        <div class="oauth-grant-badge ${isDeprecated ? 'oauth-grant-deprecated' : 'oauth-grant-standard'}">
+          ${e(analysis.label)}
+        </div>
+        ${isDeprecated ? '<span class="oauth-deprecated-notice">⚠ Deprecated in OAuth 2.1</span>' : ''}
+      </div>
+    `;
+
+    if (grantInfo.description) {
+      html += `<div class="oauth-description">${e(grantInfo.description)}</div>`;
+    }
+
+    // ── Metadata grid ──────────────────────────────────────────────────────
+    html += '<div class="details-grid">';
+    if (analysis.clientId)  html += `<div class="label">Client ID:</div><div class="value mono">${e(analysis.clientId)}</div>`;
+    if (analysis.responseType) html += `<div class="label">Response Type:</div><div class="value">${e(analysis.responseType)}</div>`;
+    if (analysis.redirectUri)  html += `<div class="label">Redirect URI:</div><div class="value">${e(analysis.redirectUri)}</div>`;
+    if (analysis.responseMode) html += `<div class="label">Response Mode:</div><div class="value">${e(analysis.responseMode)}</div>`;
+    if (analysis.state)        html += `<div class="label">State:</div><div class="value mono">${e(analysis.state.substring(0, 40))}${analysis.state.length > 40 ? '…' : ''}</div>`;
+    if (analysis.nonce)        html += `<div class="label">Nonce:</div><div class="value mono">${e(analysis.nonce.substring(0, 40))}${analysis.nonce.length > 40 ? '…' : ''}</div>`;
+    if (analysis.prompt)       html += `<div class="label">Prompt:</div><div class="value">${e(analysis.prompt)}</div>`;
+    if (analysis.loginHint)    html += `<div class="label">Login Hint:</div><div class="value">${e(analysis.loginHint)}</div>`;
+    if (analysis.domainHint)   html += `<div class="label">Domain Hint:</div><div class="value">${e(analysis.domainHint)}</div>`;
+    if (analysis.authMethod)   html += `<div class="label">Auth Method:</div><div class="value">${e(analysis.authMethodLabel || analysis.authMethod)}</div>`;
+    if (analysis.deviceCodePrefix) html += `<div class="label">Device Code:</div><div class="value mono">${e(analysis.deviceCodePrefix)}</div>`;
+    html += '</div>';
+
+    // ── PKCE details ──────────────────────────────────────────────────────
+    if (analysis.pkce) {
+      html += this.renderPKCEDetails(analysis.pkce);
+    }
+    if (analysis.pkceVerifier) {
+      html += this.renderPKCEVerifierDetails(analysis.pkceVerifier);
+    }
+
+    // ── Client assertion JWT ───────────────────────────────────────────────
+    if (analysis.clientAssertion && !analysis.clientAssertion.error) {
+      html += this.renderClientAssertionDetails(analysis.clientAssertion);
+    }
+
+    // ── Scopes ────────────────────────────────────────────────────────────
+    if (analysis.scopeLabels && analysis.scopeLabels.length > 0) {
+      html += this.renderScopeList(analysis.scopeLabels);
+    }
+
+    // ── Security warnings ────────────────────────────────────────────────
+    if (analysis.warnings && analysis.warnings.length > 0) {
+      html += this.renderOAuthWarnings(analysis.warnings);
+    }
+
+    return html;
+  }
+
+  /**
+   * Render PKCE code_challenge section.
+   */
+  renderPKCEDetails(pkce) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    const statusClass = pkce.isS256 ? 'pkce-compliant' : 'pkce-warning';
+    const statusIcon  = pkce.isS256 ? '✓' : '⚠';
+    return `
+      <div class="oauth-section">
+        <h5>🔐 PKCE — Code Challenge</h5>
+        <div class="pkce-status ${statusClass}">${statusIcon} ${e(pkce.recommendation)}</div>
+        <div class="details-grid">
+          <div class="label">Method:</div>
+          <div class="value">${e(pkce.codeChallengeMethod)}</div>
+          <div class="label">Challenge (${pkce.challengeLength} chars):</div>
+          <div class="value mono">${e(pkce.codeChallenge ? pkce.codeChallenge.substring(0, 50) + (pkce.codeChallenge.length > 50 ? '…' : '') : '')}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Render PKCE code_verifier section.
+   */
+  renderPKCEVerifierDetails(verifier) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    if (verifier.error) {
+      return `<div class="oauth-section"><h5>🔐 PKCE — Code Verifier</h5><div class="error">${e(verifier.error)}</div></div>`;
+    }
+    const statusClass = verifier.isCompliant ? 'pkce-compliant' : 'pkce-error';
+    const statusIcon  = verifier.isCompliant ? '✓' : '✗';
+    return `
+      <div class="oauth-section">
+        <h5>🔐 PKCE — Code Verifier</h5>
+        <div class="pkce-status ${statusClass}">${statusIcon} ${e(verifier.recommendation)}</div>
+        <div class="details-grid">
+          <div class="label">Length:</div>
+          <div class="value">${verifier.length} chars ${verifier.isCompliant ? '✓ RFC 7636' : '✗ out-of-range'}</div>
+          <div class="label">Entropy:</div>
+          <div class="value">${verifier.isHighEntropy ? 'High (≥64 chars)' : 'Standard'}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Render client_assertion JWT section.
+   */
+  renderClientAssertionDetails(assertion) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    const expiredNote = assertion.isExpired === true
+      ? ' <span class="oauth-expired">⚠ EXPIRED</span>'
+      : (assertion.isExpired === false ? ' ✓' : '');
+    return `
+      <div class="oauth-section">
+        <h5>🎫 Client Assertion (JWT)</h5>
+        <div class="details-grid">
+          ${assertion.algorithm ? `<div class="label">Algorithm:</div><div class="value">${e(assertion.algorithm)}</div>` : ''}
+          ${assertion.keyId ? `<div class="label">Key ID (kid):</div><div class="value mono">${e(assertion.keyId.substring(0, 50))}</div>` : ''}
+          ${assertion.thumbprint ? `<div class="label">Thumbprint:</div><div class="value mono">${e(assertion.thumbprint.substring(0, 50))}</div>` : ''}
+          ${assertion.issuer ? `<div class="label">Issuer:</div><div class="value">${e(assertion.issuer)}</div>` : ''}
+          ${assertion.audience ? `<div class="label">Audience:</div><div class="value">${e(Array.isArray(assertion.audience) ? assertion.audience.join(', ') : assertion.audience)}</div>` : ''}
+          ${assertion.expiry ? `<div class="label">Expiry:</div><div class="value">${e(assertion.expiry)}${expiredNote}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Render the list of OAuth scopes with human-readable labels.
+   */
+  renderScopeList(scopeLabels) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    const items = scopeLabels.map(({ scope, label }) => `
+      <div class="scope-item">
+        <span class="scope-name">${e(scope)}</span>
+        ${label ? `<span class="scope-label">${e(label)}</span>` : ''}
+      </div>
+    `).join('');
+    return `
+      <div class="oauth-section">
+        <h5>📍 Requested Scopes (${scopeLabels.length})</h5>
+        <div class="scope-list">${items}</div>
+      </div>
+    `;
+  }
+
+  /**
+   * Render OAuth security warnings.
+   */
+  renderOAuthWarnings(warnings) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    const items = warnings.map(w => `
+      <div class="oauth-warning oauth-warning-${w.severity}">
+        <span class="oauth-warning-icon">${w.severity === 'error' ? '🔴' : w.severity === 'warning' ? '🟡' : '🔵'}</span>
+        <span class="oauth-warning-text">${e(w.message)}</span>
+      </div>
+    `).join('');
+    return `
+      <div class="oauth-section">
+        <h5>🛡 Security Assessment</h5>
+        ${items}
+      </div>
+    `;
   }
 
   /**
@@ -607,22 +1230,106 @@ class EntraAuthTracerUI {
     // URL parameters
     const url = new URL(request.url);
     const params = Array.from(url.searchParams.entries());
-    
+
+    const urlParamsCopyText = params.length > 0
+      ? params.map(([k, v]) => `${k}: ${this.redactSensitiveValues(k, v)}`).join('\n')
+      : 'No URL parameters';
+    this.setSectionHeader('urlParamsSectionHeader', 'URL Parameters', urlParamsCopyText);
+
     if (params.length > 0) {
       urlParameters.innerHTML = params.map(([key, value]) => `
-        <div class="param-name">${key}:</div>
-        <div class="param-value">${this.redactSensitiveValues(key, value)}</div>
+        <div class="param-name">${this.escapeHtml(key)}:</div>
+        <div class="param-value">${this.escapeHtml(this.redactSensitiveValues(key, value))}</div>
       `).join('');
     } else {
       urlParameters.innerHTML = '<div class="param-value">No URL parameters</div>';
     }
 
     // Request body
+    let bodyCopyText = 'No request body';
     if (request.requestBody) {
+      bodyCopyText = this.requestBodyAsText(request.requestBody);
       requestBody.innerHTML = this.renderRequestBody(request.requestBody);
     } else {
       requestBody.innerHTML = '<div class="param-value">No request body</div>';
     }
+    this.setSectionHeader('formDataSectionHeader', 'Form Data / Request Body', bodyCopyText);
+
+    // Show device code timeline for device_code flows
+    this.populateDeviceCodeTimeline(request);
+  }
+
+  /**
+   * Populate the Device Code Flow Timeline in the Parameters tab.
+   * Correlates all device_code poll requests for the same device_code.
+   */
+  populateDeviceCodeTimeline(request) {
+    const timelineSection = document.getElementById('deviceCodeTimeline');
+    const timelineDetails = document.getElementById('deviceCodeDetails');
+    if (!timelineSection || !timelineDetails) return;
+
+    const flowType = request.flowType || '';
+    if (!flowType.startsWith('device_code')) {
+      timelineSection.style.display = 'none';
+      return;
+    }
+
+    timelineSection.style.display = 'block';
+
+    // Gather related requests: all device_code requests from the full set
+    const correlationKey = request.deviceCodeCorrelationKey;
+    let relatedIds = [];
+    if (correlationKey) {
+      // Retrieve IDs from the background's correlation map (passed through via state)
+      // In practice they're available via currentRequests filtered by same correlation key
+      relatedIds = this.currentRequests
+        .filter(r => r.deviceCodeCorrelationKey === correlationKey)
+        .map(r => r.id);
+    }
+
+    const timelineRequests = relatedIds.length > 1
+      ? this.currentRequests.filter(r => relatedIds.includes(r.id))
+      : [request];
+
+    timelineDetails.innerHTML = timelineRequests
+      .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+      .map((r, idx) => {
+        const isInitiation = (r.flowType === 'device_code_initiation');
+        const time = new Date(r.timestamp || Date.now()).toLocaleTimeString();
+        const markerClass = isInitiation ? 'timeline-initiation'
+          : r.status === 'completed' ? 'timeline-success'
+          : r.status === 'error'     ? 'timeline-error'
+          : 'timeline-poll';
+        const label = isInitiation ? 'Device Code Initiation' : `Poll #${idx} — ${r.status || 'pending'}`;
+        const isCurrent = r.id === request.id ? ' timeline-current' : '';
+        return `
+          <div class="timeline-item${isCurrent}">
+            <div class="timeline-marker ${markerClass}"></div>
+            <div class="timeline-content">
+              <div class="timeline-time">${time}</div>
+              <div class="timeline-details">${label}${
+                r.oauthAnalysis && r.oauthAnalysis.clientId
+                  ? ` &mdash; Client: ${this.escapeHtml(r.oauthAnalysis.clientId)}`
+                  : ''
+              }</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+  }
+
+  /**
+   * Format request body as plain text for clipboard copying.
+   */
+  requestBodyAsText(body) {
+    if (body.type === 'formData') {
+      return Object.entries(body.data)
+        .map(([k, values]) => `${k}: ${this.redactSensitiveValues(k, values[0])}`)
+        .join('\n');
+    } else if (body.type === 'json') {
+      return JSON.stringify(body.data, null, 2);
+    }
+    return String(body.data);
   }
 
   /**
@@ -798,6 +1505,10 @@ class EntraAuthTracerUI {
     samlRequestEl.innerHTML = '<div class="loading">Decoding SAML…</div>';
     samlResponseEl.innerHTML = '';
 
+    // Set default section headers while loading
+    this.setSectionHeader('samlRequestSectionHeader', 'SAML Request', '');
+    this.setSectionHeader('samlResponseSectionHeader', 'SAML Response', '');
+
     const decoded = await SamlDecoder.decodeSamlFromRequest(request);
 
     if (!decoded) {
@@ -819,27 +1530,172 @@ class EntraAuthTracerUI {
       </details>`;
       samlRequestEl.innerHTML = `<div class="error">${this.escapeHtml(decoded.parsed.error)}</div>${rawHtml}`;
       samlResponseEl.innerHTML = '';
+      this.setSectionHeader('samlRequestSectionHeader', 'SAML Request', decoded.xmlText || '');
       return;
     }
 
     const isResponse = decoded.messageType === 'SAMLResponse' || (decoded.parsed && decoded.parsed.messageType === 'Response');
     const primaryEl = isResponse ? samlResponseEl : samlRequestEl;
     const emptyEl = isResponse ? samlRequestEl : samlResponseEl;
+    const primaryHeaderId = isResponse ? 'samlResponseSectionHeader' : 'samlRequestSectionHeader';
+    const primaryTitle = isResponse ? 'SAML Response' : 'SAML Request';
 
     primaryEl.innerHTML = this.renderSamlDecoded(decoded);
     emptyEl.innerHTML = `<div class="empty-state">No ${isResponse ? 'SAMLRequest' : 'SAMLResponse'} captured for this request.</div>`;
+
+    // Copy text = pretty-printed XML
+    const copyXml = decoded.xmlText ? SamlDecoder.prettyPrintXml(decoded.xmlText) : '';
+    this.setSectionHeader(primaryHeaderId, primaryTitle, copyXml);
   }
 
   /**
-   * Populate Entra tab
+   * Populate Entra tab — shows OAuth grant analysis and any available JWT claims.
+   * JWT from response bodies is not available in MV3; we decode client_assertion
+   * and id_token_hint JWTs present in the request itself.
    */
   populateEntraTab(request) {
     const entraSummary = document.getElementById('entraSummary');
-    const entraClaims = document.getElementById('entraClaims');
+    const entraClaims  = document.getElementById('entraClaims');
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
 
-    // This will be fully implemented when JWT decoding is added
-    entraSummary.innerHTML = '<div>Entra token decoding not yet implemented</div>';
-    entraClaims.innerHTML = '<div>JWT claims analysis not yet implemented</div>';
+    const analysis = request.oauthAnalysis;
+
+    // ── Summary section ────────────────────────────────────────────────────
+    if (analysis && !analysis.error) {
+      let summaryHtml = `
+        <div class="details-grid">
+          <div class="label">Grant Type:</div>
+          <div class="value">${e(analysis.label)}</div>
+          ${analysis.clientId ? `<div class="label">Client ID:</div><div class="value mono">${e(analysis.clientId)}</div>` : ''}
+          ${analysis.scopes && analysis.scopes.length ? `<div class="label">Scopes:</div><div class="value">${analysis.scopes.map(s => e(s)).join(', ')}</div>` : ''}
+        </div>
+      `;
+      if (analysis.pkce) {
+        summaryHtml += `
+          <div class="entra-badge-row">
+            <span class="entra-feature-badge pkce-badge">PKCE — ${e(analysis.pkce.codeChallengeMethod)}</span>
+            ${analysis.pkce.isS256 ? '<span class="entra-feature-badge compliant-badge">✓ RFC 7636 Compliant</span>' : '<span class="entra-feature-badge warning-badge">⚠ Use S256</span>'}
+          </div>
+        `;
+      }
+      if (analysis.authMethod) {
+        summaryHtml += `
+          <div class="entra-badge-row">
+            <span class="entra-feature-badge auth-method-badge">${e(analysis.authMethodLabel || analysis.authMethod)}</span>
+          </div>
+        `;
+      }
+      entraSummary.innerHTML = summaryHtml;
+      const summaryText = [
+        `Grant: ${analysis.label}`,
+        analysis.clientId ? `Client ID: ${analysis.clientId}` : '',
+        analysis.scopes && analysis.scopes.length ? `Scopes: ${analysis.scopes.join(' ')}` : ''
+      ].filter(Boolean).join('\n');
+      this.setSectionHeader('entraSummarySectionHeader', 'Summary', summaryText);
+    } else {
+      entraSummary.innerHTML = '<div class="empty-state">No Entra-specific analysis available for this request.</div>';
+      this.setSectionHeader('entraSummarySectionHeader', 'Summary', '');
+    }
+
+    // ── JWT Claims section ──────────────────────────────────────────────────
+    // Attempt to decode any JWT travelling in request parameters:
+    // client_assertion (client credentials / auth code), id_token_hint (authorize)
+    const jwtSource = (analysis && analysis.clientAssertion && !analysis.clientAssertion.error)
+      ? { jwt: this.extractJwtFromRequest(request), label: 'client_assertion' }
+      : (analysis && analysis.idTokenHint && !analysis.idTokenHint.error)
+        ? { jwt: this.extractJwtFromRequest(request, 'id_token_hint'), label: 'id_token_hint' }
+        : null;
+
+    if (jwtSource && jwtSource.jwt) {
+      const decoded = EntraClaimsDecoder.decodeEntraToken(jwtSource.jwt);
+      if (!decoded.error) {
+        entraClaims.innerHTML = this.renderEntraClaims(decoded, jwtSource.label);
+        this.setSectionHeader('entraClaimsSectionHeader', 'JWT Claims', `JWT source: ${jwtSource.label}`);
+
+        // Update CAE badge
+        const entraTabBtn = document.querySelector('[data-tab="entra"]');
+        const caeBadge = entraTabBtn ? entraTabBtn.querySelector('.cae-badge') : null;
+        if (caeBadge) caeBadge.style.display = decoded.caeEnabled ? 'inline' : 'none';
+        return;
+      }
+    }
+
+    entraClaims.innerHTML = '<div class="empty-state">JWT claims are decoded from <strong>client_assertion</strong> or <strong>id_token_hint</strong> parameters when present. Full access token decoding will be available in Phase 4.</div>';
+    this.setSectionHeader('entraClaimsSectionHeader', 'JWT Claims', '');
+  }
+
+  /**
+   * Extract a JWT string from known request parameters.
+   */
+  extractJwtFromRequest(request, paramName = 'client_assertion') {
+    // Check request body (form data)
+    if (request.requestBody && request.requestBody.type === 'formData') {
+      const vals = request.requestBody.data[paramName];
+      if (vals) return Array.isArray(vals) ? vals[0] : vals;
+    }
+    // Check URL params
+    try {
+      const url = new URL(request.url);
+      const val = url.searchParams.get(paramName);
+      if (val) return val;
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /**
+   * Render decoded Entra JWT claims into HTML.
+   */
+  renderEntraClaims(decoded, source) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    let html = '';
+
+    // Token summary bar
+    if (decoded.summary) {
+      const s = decoded.summary;
+      html += `
+        <div class="entra-token-summary">
+          ${s.identityType ? `<span class="entra-feature-badge">${e(s.identityType)}</span>` : ''}
+          ${s.tokenVersion ? `<span class="entra-feature-badge">v${e(s.tokenVersion)}</span>` : ''}
+          ${decoded.caeEnabled ? '<span class="entra-feature-badge cae-feature">CAE ✓</span>' : ''}
+          ${decoded.popBinding ? '<span class="entra-feature-badge pop-feature">PoP Bound</span>' : ''}
+          ${s.isExpired ? '<span class="entra-feature-badge expired-feature">⚠ Expired</span>' : ''}
+          <span class="entra-source-note">Source: ${e(source)}</span>
+        </div>
+        <div class="details-grid">
+          ${s.tenant ? `<div class="label">Tenant:</div><div class="value mono">${e(s.tenant)}</div>` : ''}
+          ${s.audience ? `<div class="label">Audience:</div><div class="value">${e(Array.isArray(s.audience) ? s.audience.join(', ') : s.audience)}</div>` : ''}
+          ${s.expiry ? `<div class="label">Expiry:</div><div class="value">${e(s.expiry)}</div>` : ''}
+          ${s.scopes ? `<div class="label">Scopes:</div><div class="value">${e(s.scopes)}</div>` : ''}
+        </div>
+      `;
+    }
+
+    // Warnings
+    if (decoded.warnings && decoded.warnings.length > 0) {
+      html += this.renderOAuthWarnings(decoded.warnings);
+    }
+
+    // Claims table
+    if (decoded.claims && decoded.claims.length > 0) {
+      html += '<div class="claims-table">';
+      for (const claim of decoded.claims) {
+        const rowClass = claim.isEntraSpecific ? 'claim-entra' : 'claim-standard';
+        html += `
+          <div class="claim-row ${rowClass}">
+            <div class="claim-name" title="${e(claim.detail || '')}">
+              ${e(claim.name)}
+              ${claim.label ? `<span class="claim-label">${e(claim.label)}</span>` : ''}
+            </div>
+            <div class="claim-value ${claim.isTimestamp ? 'claim-timestamp' : ''}">` +
+              this.makeCopyBtn(String(claim.rawValue), `Copy ${claim.name}`) +
+              `${e(claim.value)}</div>
+          </div>
+        `;
+      }
+      html += '</div>';
+    }
+
+    return html;
   }
 
   /**
@@ -938,35 +1794,45 @@ class EntraAuthTracerUI {
   }
 
   /**
-   * Popup height resize handle — drag the bottom-right corner to make the popup taller/shorter.
+   * Popup resize handle — drag the bottom-right corner to resize both width and height.
+   * Maximum dimensions are capped at the available screen area.
    */
   initPopupResize() {
     const handle = document.getElementById('resizeHandle');
     if (!handle) return;
 
-    // Restore saved popup height
+    const html = document.documentElement;
+
+    // Restore saved popup dimensions onto the html element (which drives the popup window size)
     const savedH = localStorage.getItem('entraTracerPopupH');
-    if (savedH) {
-      document.body.style.height = savedH + 'px';
-    }
+    if (savedH) html.style.height = parseFloat(savedH) + 'px';
+    const savedW = localStorage.getItem('entraTracerPopupW');
+    if (savedW) html.style.width = parseFloat(savedW) + 'px';
 
     let dragging = false;
-    let startY = 0;
-    let startH = 0;
+    let startX = 0, startY = 0, startW = 0, startH = 0;
 
     handle.addEventListener('mousedown', (e) => {
       dragging = true;
+      startX = e.clientX;
       startY = e.clientY;
-      startH = document.body.getBoundingClientRect().height;
+      startW = html.getBoundingClientRect().width;
+      startH = html.getBoundingClientRect().height;
       document.body.classList.add('no-select');
       e.preventDefault();
     });
 
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      const newH = Math.max(400, Math.min(1200, startH + (e.clientY - startY)));
-      document.body.style.height = newH + 'px';
+      const maxH = window.screen.availHeight;
+      const maxW = window.screen.availWidth;
+      const newH = Math.max(400, Math.min(maxH, startH + (e.clientY - startY)));
+      const newW = Math.max(960, Math.min(maxW, startW + (e.clientX - startX)));
+      // Setting dimensions on the html element causes Chrome to resize the popup window
+      html.style.width = newW + 'px';
+      html.style.height = newH + 'px';
       localStorage.setItem('entraTracerPopupH', newH);
+      localStorage.setItem('entraTracerPopupW', newW);
     });
 
     document.addEventListener('mouseup', () => {
