@@ -10,6 +10,9 @@ build/
 *.tgz
 *.zip
 
+# Internal build documentation
+README-Build.md
+
 # Environment variables
 .env
 .env.local
