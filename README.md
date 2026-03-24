@@ -45,6 +45,15 @@ A Chromium-based browser extension for deep inspection of Microsoft Entra (Azure
 - **Status Bar Breakdown**: Live per-category request counts (SAML, OAuth, FIDO2, Device Code) plus error count next to the total
 - **Advanced Filtering**: Real-time search, method, flow-type, and status filters
 
+### ✅ Phase 6 - Polish, Distribution & Community (COMPLETE)
+- **Extension Icon Badge**: Live event-counter badge on the toolbar icon — increments on each captured auth event and resets when the popup is opened, giving an at-a-glance indicator of activity without opening the extension
+- **Browser Store Publication**: Submit to the Chrome Web Store and Microsoft Edge Add-ons Store for one-click installation
+- **GitHub Repository**: Source code, issues, and releases published at [github.com/darrenjrobinson/EntraAuthTracer](https://github.com/darrenjrobinson/EntraAuthTracer)
+- **Blog & Tutorials**: Feature walkthroughs and deep-dives published at [blog.darrenjrobinson.com](https://blog.darrenjrobinson.com)
+- **Code Cleanup**: Removed unused imports, fixed ESLint errors (upgraded to ES2022 for class static fields, added `node` env for module exports), renamed unused parameters with `_` prefix, fixed `no-prototype-builtins` violation in `EntraClaimsDecoder`, added `no-constant-condition` disable for the intentional `while (true)` loop in `SamlDecoder.inflateRaw`
+- **Test Coverage**: Achieved **97.29% line coverage** (232 tests) — well above the ≥ 90% target; added tests for `initialize`/`startListening`/`stopListening`, `handleOAuthRequest`, `handleFido2Request`, `handleDeviceCodeRequest`, all HTTP event handlers, background lifecycle handlers, SAML redirect-binding decode, and fixed a `cbor-web` import bug where `import CBOR from 'cbor-web'` yielded `undefined` under Babel
+- **Accessibility Audit**: Applied WCAG 2.1 AA fixes — `aria-label` on all unlabelled form controls (search input, three filter selects), `role="tablist"`/`role="tab"`/`role="tabpanel"` with `aria-selected`, `aria-controls`, `aria-labelledby` on the tab widget, `aria-label` on the close-detail button, `aria-live="polite"` on the request list, `role="separator"` with keyboard `tabindex` on both resize handles, and a `.sr-only` utility class in `ui.css`
+
 ## Installation
 
 ### Development Installation (Sideloading)
@@ -88,12 +97,12 @@ The extension will be available on:
 
 | Flow Type | Status | Description |
 |-----------|---------|-------------|
-| **SAML 2.0** | ✅ Inherited | Full SAML assertion and request analysis |
-| **WS-Federation** | ✅ Inherited | WS-Fed `wresult` payload decoding |
-| **FIDO2/Passkey** | 🚧 In Progress | WebAuthn attestation and assertion analysis |
-| **OAuth 2.1 PKCE** | 🔄 Planned | Authorization Code + PKCE flow inspection |
-| **Device Code** | 🔄 Planned | Device code initiation, polling, and token exchange |
-| **Client Credentials** | 🔄 Planned | Machine-to-machine authentication analysis |
+| **SAML 2.0** | ✅ Complete | Full SAML assertion and request analysis |
+| **WS-Federation** | ✅ Complete | WS-Fed `wresult` payload decoding |
+| **FIDO2/Passkey** | ✅ Complete | WebAuthn attestation and assertion analysis with CBOR decoding |
+| **OAuth 2.1 PKCE** | ✅ Complete | Authorization Code + PKCE flow inspection with RFC 7636 checks |
+| **Device Code** | ✅ Complete | Device code initiation, polling, and token exchange with timeline |
+| **Client Credentials** | ✅ Complete | Machine-to-machine authentication analysis |
 
 ## Development
 
@@ -193,6 +202,7 @@ This is a fork of [SimpleSAMLphp SAML-tracer](https://github.com/SimpleSAMLphp/S
 - [x] **Phase 3**: Implement OAuth 2.1 flow detection and device code correlation
 - [x] **Phase 4**: Add comprehensive Entra JWT claims registry and CAE detection
 - [x] **Phase 5**: Build enhanced UI with export capabilities and Fluent design
+- [x] **Phase 6**: Extension icon badge, browser store publication, GitHub/blog links, code cleanup, and accessibility audit
 
 ## License
 

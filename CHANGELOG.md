@@ -5,7 +5,45 @@ All notable changes to the Entra Auth Tracer extension are documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Phase 5
+## [Unreleased] — Phase 6
+
+### Phase 6 - Polish, Distribution & Community
+
+#### Added
+- **Extension Icon Badge**
+  - Live request counter on the browser toolbar icon; increments on each captured auth event via `chrome.action.setBadgeText`
+  - Badge background colour set to Entra blue (`#0078D4`) on extension initialisation via `chrome.action.setBadgeBackgroundColor`
+  - Badge resets to empty string when the popup is opened (`resetBadge` message sent from `ui.js` `init()`)
+  - `onNewAuthRequest` callback wired from `background.js` into `SAMLTrace` state; `SAMLTrace.js` invokes the callback after each stored auth request
+
+- **Accessibility (WCAG 2.1 AA)**
+  - `aria-label` added to search input and all three filter selects (HTTP method, flow type, request status)
+  - Proper ARIA tab widget: `role="tablist"` on the tab container; `role="tab"`, `aria-selected`, `aria-controls`, and `id` on each tab button; `role="tabpanel"` with `aria-labelledby` on each tab pane
+  - `aria-label="Close request details"` on the close-detail button (`×`)
+  - `aria-live="polite"` and `role="list"` on the request list container for screen-reader announcements of new captures
+  - `role="separator"`, `aria-orientation`, and `tabindex="0"` on both resize handles (pane splitter and popup resize corner)
+  - `.sr-only` utility class added to `ui.css` for visually hidden but screen-reader-accessible labels
+  - `switchTab()` in `ui.js` now sets `aria-selected="true/false"` on tab buttons when switching
+
+- **Test Coverage (97.29% line coverage — 232 tests)**
+  - `tests/background.test.js` — new; covers `onNewAuthRequest`, `resetBadge`, `getExtensionState`, message handler switch cases, `onExtensionStartup`, `onExtensionSuspend`
+  - `tests/SAMLTrace.test.js` — new; covers `initialize`/`startListening`/`stopListening`, `handleFlowSpecifics` (all switch branches), `handleOAuthRequest`, `handleFido2Request` (success, decoder-error, and throw paths), `handleDeviceCodeRequest` (initiation, first poll, correlated poll, no-body), `handleBeforeSendHeaders`, `handleHeadersReceived`, `handleCompleted`, `handleError`, and all existing analysis methods
+  - `tests/SamlDecoder.test.js` — new; covers `extract`, `decode` (preDecoded, POST, **redirect binding via `inflateRaw`**), `parse` (all four SAML message types), `getText`, `prettyPrintXml`, and end-to-end `decodeSamlFromRequest`
+  - `tests/Fido2Decoder.test.js` — extended with success-path tests for `decodeFido2Request`, `decodeAuthenticatorData`, `decodeCBORPublicKey`, and `base64urlDecodeToBuffer`
+  - `tests/setup.js` — extended with `chrome.action`, `chrome.runtime.onStartup`, `chrome.runtime.onSuspend` mocks and a `DecompressionStream` polyfill using `zlib.inflateRawSync` for jsdom compatibility
+
+#### Fixed
+- **`cbor-web` import bug** in `src/Fido2Decoder.js`: changed `import CBOR from 'cbor-web'` → `import * as CBOR from 'cbor-web'`.  The `cbor-web` module sets `__esModule: true` but has no `.default` export; the previous default import silently yielded `undefined` in Jest/Babel, meaning `decodeCBORPublicKey` always failed in tests
+
+#### Changed
+- **ESLint configuration** (`package.json`): upgraded `ecmaVersion` from `12` to `2022` to support class static fields used in `EntraClaimsDecoder` and `OAuthDecoder`; added `"node": true` env to allow the `typeof module` export guard in `background.js`
+- **Code cleanup**:
+  - Removed unused `import EntraClaimsDecoder` from `SAMLTrace.js` and unused `import Fido2Decoder` from `ui.js`
+  - Renamed unused parameters to `_`-prefixed equivalents (`_root` in `SamlDecoder.parseLogoutRequest`, `_requestBody` in `OAuthDecoder.analyzeAuthorizationRequest`, `_request` in `ui.js renderOAuthDetails`)
+  - Removed unused `url` variable from `buildTextExport` forEach, `endTime` from flow group renderer, `time` from related-requests renderer in `ui.js`
+  - Fixed `no-prototype-builtins` in `EntraClaimsDecoder.isEntraToken`: replaced `payload.hasOwnProperty(claim)` with `Object.prototype.hasOwnProperty.call(payload, claim)`
+  - Added `// eslint-disable-next-line no-constant-condition` for the intentional `while (true)` / `reader.read()` loop in `SamlDecoder.inflateRaw`
+- **`background.js` exports**: `onExtensionStartup` and `onExtensionSuspend` now exported for test isolation
 
 ### Phase 5 - Polish & Enhanced UI
 

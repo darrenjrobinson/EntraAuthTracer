@@ -4,7 +4,6 @@
  */
 
 import EntraClaimsDecoder from './EntraClaimsDecoder.js';
-import Fido2Decoder from './Fido2Decoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 import SamlDecoder from './SamlDecoder.js';
 
@@ -32,6 +31,9 @@ class EntraAuthTracerUI {
     this.startPeriodicUpdate();
     this.initSplitter();
     this.initPopupResize();
+
+    // Reset the toolbar icon badge whenever the popup is opened
+    chrome.runtime.sendMessage({ action: 'resetBadge' });
   }
 
   // ─── Copy helpers ────────────────────────────────────────────────────────────
@@ -427,7 +429,6 @@ class EntraAuthTracerUI {
     lines.push('');
 
     requests.forEach((r, i) => {
-      const url = (() => { try { return new URL(r.url); } catch { return { pathname: r.url }; } })();
       lines.push(`REQUEST ${i + 1} of ${requests.length}`);
       lines.push(hr2);
       lines.push(`Time      : ${new Date(r.timestamp).toISOString()}`);
@@ -805,7 +806,6 @@ class EntraAuthTracerUI {
     const flowBadgeClass = `flow-${group.type === 'device_code' ? 'device_code' : group.type === 'oauth' ? 'oauth' : group.type}`;
     const flowLabel = group.type === 'device_code' ? 'DEVICE CODE' : group.type.toUpperCase();
     const startTime = group.requests[0] ? new Date(group.requests[0].timestamp || Date.now()).toLocaleTimeString() : '';
-    const endTime = group.requests.length > 1 ? new Date(group.requests[group.requests.length - 1].timestamp || Date.now()).toLocaleTimeString() : null;
     const durationMs = group.requests.length > 1
       ? (group.requests[group.requests.length - 1].timestamp || 0) - (group.requests[0].timestamp || 0)
       : null;
@@ -952,7 +952,6 @@ class EntraAuthTracerUI {
     panel.style.display = 'flex';
     list.innerHTML = allInFlow.map((r, idx) => {
       const isCurrent = r.id === request.id;
-      const time = new Date(r.timestamp || Date.now()).toLocaleTimeString();
       const stepDesc = this._getFlowStepDesc(r, idx) || r.flowType || '';
       const statusIcon = r.status === 'completed' ? '✓' : r.status === 'error' ? '✗' : '⧖';
       return `<span class="related-item${isCurrent ? ' related-current' : ''}" data-request-id="${this.escapeHtml(r.id)}" title="${this.escapeHtml(r.url)}">
@@ -1292,7 +1291,7 @@ class EntraAuthTracerUI {
   /**
    * Render all OAuth analysis into HTML.
    */
-  renderOAuthDetails(analysis, request) {
+  renderOAuthDetails(analysis, _request) {
     const e = (v) => this.escapeHtml(v == null ? '' : String(v));
     let html = '';
 
@@ -2151,12 +2150,11 @@ class EntraAuthTracerUI {
    * Switch tabs
    */
   switchTab(tabName) {
-    // Update tab buttons
+    // Update tab buttons — maintain aria-selected for screen reader accessibility
     document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.classList.remove('active');
-      if (btn.dataset.tab === tabName) {
-        btn.classList.add('active');
-      }
+      const isActive = btn.dataset.tab === tabName;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
     });
 
     // Update tab content

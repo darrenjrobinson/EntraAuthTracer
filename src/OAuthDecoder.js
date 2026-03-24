@@ -121,7 +121,7 @@ class OAuthDecoder {
   /**
    * Analyse GET /authorize request parameters.
    */
-  static analyzeAuthorizationRequest(searchParams, requestBody) {
+  static analyzeAuthorizationRequest(searchParams, _requestBody) {
     const responseType   = searchParams.get('response_type') || '';
     const codeChallenge  = searchParams.get('code_challenge');
     const challMethod    = searchParams.get('code_challenge_method');

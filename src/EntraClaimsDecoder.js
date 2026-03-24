@@ -159,7 +159,7 @@ class EntraClaimsDecoder {
   static isEntraToken(payload) {
     // Check for Entra-specific claims
     const entraIndicators = ['xms_cc', 'xms_ae', 'acrs', 'cnf', 'wids', 'idtyp', 'acct', 'azpacr'];
-    const hasEntraClaims = entraIndicators.some(claim => payload.hasOwnProperty(claim));
+    const hasEntraClaims = entraIndicators.some(claim => Object.prototype.hasOwnProperty.call(payload, claim));
 
     // Check issuer
     const issuer = payload.iss || '';

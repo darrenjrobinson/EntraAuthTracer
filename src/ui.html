@@ -45,22 +45,23 @@
         <button id="viewTimelineBtn" class="view-btn" title="Timeline view" aria-pressed="false">&#9200; Timeline</button>
       </div>
       <div class="search-bar">
-        <input type="text" id="searchInput" placeholder="Search requests..." class="search-input">
+          <label for="searchInput" class="sr-only">Search requests</label>
+          <input type="text" id="searchInput" placeholder="Search requests..." class="search-input" aria-label="Search requests">
       </div>
       <div class="filters">
-        <select id="methodFilter" class="filter-select">
+        <select id="methodFilter" class="filter-select" aria-label="Filter by HTTP method">
           <option value="">All Methods</option>
           <option value="GET">GET</option>
           <option value="POST">POST</option>
         </select>
-        <select id="flowFilter" class="filter-select">
+        <select id="flowFilter" class="filter-select" aria-label="Filter by flow type">
           <option value="">All Flows</option>
           <option value="saml">SAML</option>
           <option value="oauth">OAuth</option>
           <option value="fido2">FIDO2</option>
           <option value="device_code">Device Code</option>
         </select>
-        <select id="statusFilter" class="filter-select">
+        <select id="statusFilter" class="filter-select" aria-label="Filter by request status">
           <option value="">All Status</option>
           <option value="completed">Success</option>
           <option value="error">Error</option>
@@ -80,7 +81,7 @@
           <span class="col-status">Status</span>
           <span class="col-flow">Flow</span>
         </div>
-        <div id="requestList" class="request-list">
+        <div id="requestList" class="request-list" role="list" aria-live="polite" aria-label="Captured authentication requests">
           <div class="no-requests">
             <p>No authentication requests captured yet.</p>
             <p class="hint">Navigate to a Microsoft Entra login or perform SAML authentication to start tracing.</p>
@@ -89,7 +90,7 @@
       </div>
 
       <!-- Pane Splitter - drag to resize between list and detail -->
-      <div class="pane-splitter" id="paneSplitter" style="display: none;"></div>
+      <div class="pane-splitter" id="paneSplitter" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabindex="0" style="display: none;"></div>
 
       <!-- Detail Panel -->
       <div id="detailPanel" class="detail-panel" style="display: none;">
@@ -100,7 +101,7 @@
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zm-4 4a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h-1v1H2V6h1V5H2a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-1h-1v1a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1z"/></svg>
             </button>
           </div>
-          <button id="closeDetailBtn" class="btn btn-close">&times;</button>
+          <button id="closeDetailBtn" class="btn btn-close" aria-label="Close request details">&times;</button>
         </div>
         
         <!-- Related Requests Panel (visible when correlated requests exist) -->
@@ -110,11 +111,11 @@
         </div>
 
         <!-- Tab Navigation -->
-        <div class="tab-nav">
-          <button class="tab-btn active" data-tab="http">HTTP</button>
-          <button class="tab-btn" data-tab="parameters">Parameters</button>
-          <button class="tab-btn" data-tab="saml">SAML</button>
-          <button class="tab-btn" data-tab="entra" style="display: none;">
+        <div class="tab-nav" role="tablist" aria-label="Request detail views">
+          <button class="tab-btn active" data-tab="http" role="tab" aria-selected="true" aria-controls="httpTab" id="tab-http">HTTP</button>
+          <button class="tab-btn" data-tab="parameters" role="tab" aria-selected="false" aria-controls="parametersTab" id="tab-parameters">Parameters</button>
+          <button class="tab-btn" data-tab="saml" role="tab" aria-selected="false" aria-controls="samlTab" id="tab-saml">SAML</button>
+          <button class="tab-btn" data-tab="entra" role="tab" aria-selected="false" aria-controls="entraTab" id="tab-entra" style="display: none;">
             Entra
             <span class="cae-badge" style="display: none;">CAE</span>
           </button>
@@ -123,7 +124,7 @@
         <!-- Tab Content -->
         <div class="tab-content">
           <!-- HTTP Tab -->
-          <div id="httpTab" class="tab-pane active">
+          <div id="httpTab" class="tab-pane active" role="tabpanel" aria-labelledby="tab-http">
             <div class="section">
               <div id="requestSectionHeader" class="section-header"><h4>Request</h4></div>
               <div id="requestDetails" class="details-grid">
@@ -156,7 +157,7 @@
           </div>
 
           <!-- Parameters Tab -->
-          <div id="parametersTab" class="tab-pane">
+          <div id="parametersTab" class="tab-pane" role="tabpanel" aria-labelledby="tab-parameters">
             <div class="section">
               <div id="urlParamsSectionHeader" class="section-header"><h4>URL Parameters</h4></div>
               <div id="urlParameters" class="parameters-grid">
@@ -181,7 +182,7 @@
           </div>
 
           <!-- SAML Tab -->
-          <div id="samlTab" class="tab-pane">
+          <div id="samlTab" class="tab-pane" role="tabpanel" aria-labelledby="tab-saml">
             <div class="section">
               <div id="samlRequestSectionHeader" class="section-header"><h4>SAML Request</h4></div>
               <div id="samlRequest" class="saml-content">
@@ -198,7 +199,7 @@
           </div>
 
           <!-- Entra Tab -->
-          <div id="entraTab" class="tab-pane">
+          <div id="entraTab" class="tab-pane" role="tabpanel" aria-labelledby="tab-entra">
             <!-- Summary Section -->
             <div class="section">
               <div id="entraSummarySectionHeader" class="section-header"><h4>Summary</h4></div>
@@ -227,7 +228,7 @@
   </div>
 
   <!-- Popup resize handle - drag bottom-right corner to resize popup height -->
-  <div id="resizeHandle" class="resize-handle" title="Drag to resize popup"></div>
+  <div id="resizeHandle" class="resize-handle" title="Drag to resize popup" role="separator" aria-orientation="horizontal" aria-label="Drag to resize popup height" tabindex="0"></div>
 
   <script src="ui.js"></script>
 </body>

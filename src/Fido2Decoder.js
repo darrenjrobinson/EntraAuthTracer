@@ -10,7 +10,7 @@
  */
 
 // Import CBOR decoder for credential public key parsing
-import CBOR from 'cbor-web';
+import * as CBOR from 'cbor-web';
 
 class Fido2Decoder {
   /**

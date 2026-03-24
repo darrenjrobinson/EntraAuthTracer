@@ -11,7 +11,6 @@
  */
 
 import Fido2Decoder from './Fido2Decoder.js';
-import EntraClaimsDecoder from './EntraClaimsDecoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 
 class SAMLTrace {
@@ -95,6 +94,11 @@ class SAMLTrace {
 
       // Store request data
       this.state.requests.push(requestData);
+
+      // Notify badge counter
+      if (typeof this.state.onNewAuthRequest === 'function') {
+        this.state.onNewAuthRequest();
+      }
 
       // Handle specific flow types
       this.handleFlowSpecifics(requestData, details);

@@ -13,15 +13,41 @@ const extensionState = {
   requests: [],
   deviceCodeCorrelation: new Map(),
   fido2Sessions: [],
-  isActive: false
+  isActive: false,
+  badgeCount: 0
 };
+
+// ─── Badge management ────────────────────────────────────────────────────────
+
+/**
+ * Called by SAMLTrace whenever a new authoritative auth request is stored.
+ * Increments the toolbar badge counter.
+ */
+function onNewAuthRequest() {
+  extensionState.badgeCount++;
+  chrome.action.setBadgeText({ text: String(extensionState.badgeCount) });
+}
+
+/**
+ * Reset the badge to zero (called when the popup is opened).
+ */
+function resetBadge() {
+  extensionState.badgeCount = 0;
+  chrome.action.setBadgeText({ text: '' });
+}
 
 /**
  * Initialize the extension
  */
 function initializeExtension() {
   console.log('Entra Auth Tracer: Initializing...');
-  
+
+  // Wire up the badge callback so SAMLTrace can notify on new requests
+  extensionState.onNewAuthRequest = onNewAuthRequest;
+
+  // Set a persistent badge background colour (Entra blue)
+  chrome.action.setBadgeBackgroundColor({ color: '#0078D4' });
+
   // Initialize SAML tracer with Entra extensions
   SAMLTrace.initialize(extensionState);
   
@@ -76,6 +102,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       extensionState.requests = [];
       extensionState.deviceCodeCorrelation.clear();
       extensionState.fido2Sessions = [];
+      resetBadge();
+      sendResponse({ success: true });
+      break;
+    case 'resetBadge':
+      resetBadge();
       sendResponse({ success: true });
       break;
     case 'exportData':
@@ -95,6 +126,10 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     initializeExtension,
     getExtensionState,
+    resetBadge,
+    onNewAuthRequest,
+    onExtensionStartup,
+    onExtensionSuspend,
     extensionState
   };
 }

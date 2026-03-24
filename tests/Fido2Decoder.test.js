@@ -255,5 +255,116 @@ describe('Fido2Decoder', () => {
       expect(Fido2Decoder.getCurveDescription(999)).toBe('Unknown (999)');
     });
   });
+  }); // closes the improperly-nested decodeFido2Request describe
+
+  // ─── Additional coverage tests ───────────────────────────────────────────
+
+  describe('base64urlDecodeToBuffer', () => {
+    it('should decode a base64url string to an ArrayBuffer', () => {
+      // btoa('Hello') = 'SGVsbG8='  →  base64url = 'SGVsbG8'
+      const b64url = btoa('Hello').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      const result = Fido2Decoder.base64urlDecodeToBuffer(b64url);
+      expect(result).toBeInstanceOf(ArrayBuffer);
+      expect(result.byteLength).toBe(5);
+      const view = new Uint8Array(result);
+      expect(view[0]).toBe(72); // 'H'
+      expect(view[4]).toBe(111); // 'o'
+    });
+
+    it('should produce a buffer with the correct byte values', () => {
+      const b64url = btoa('\x00\xFF').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      const result = Fido2Decoder.base64urlDecodeToBuffer(b64url);
+      const view = new Uint8Array(result);
+      expect(view[0]).toBe(0x00);
+      expect(view[1]).toBe(0xFF);
+    });
+  });
+
+  describe('decodeAuthenticatorData - success paths', () => {
+    function makeAuthData(flagsByte, extraBytes = new Uint8Array(0)) {
+      const buf = new Uint8Array(37 + extraBytes.length);
+      buf[32] = flagsByte;
+      // signCount stays 0 (bytes 33-36)
+      extraBytes.forEach((b, i) => { buf[37 + i] = b; });
+      return btoa(String.fromCharCode(...buf)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+
+    it('should decode minimal 37-byte authenticatorData with UP flag only', () => {
+      const result = Fido2Decoder.decodeAuthenticatorData(makeAuthData(0x01));
+      expect(result.rpIdHash).toHaveLength(64); // 32 bytes → 64 hex chars
+      expect(result.flags.UP).toBe(true);
+      expect(result.flags.AT).toBe(false);
+      expect(result.signCount).toBe(0);
+      expect(result.attestedCredentialData).toBeNull();
+    });
+
+    it('should decode authenticatorData with UP+UV flags', () => {
+      const result = Fido2Decoder.decodeAuthenticatorData(makeAuthData(0x05));
+      expect(result.flags.UP).toBe(true);
+      expect(result.flags.UV).toBe(true);
+    });
+
+    it('should reject authenticatorData shorter than 37 bytes', () => {
+      const short = new Uint8Array(10);
+      const b64url = btoa(String.fromCharCode(...short)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      expect(() => Fido2Decoder.decodeAuthenticatorData(b64url))
+        .toThrow('Failed to decode authenticatorData');
+    });
+
+    it('should parse attested credential data when AT flag is set', () => {
+      // 16 bytes AAGUID (all zeros) + 2 bytes credIdLen=0 + 1 byte CBOR empty map
+      const attested = new Uint8Array([...new Array(16).fill(0), 0x00, 0x00, 0xa0]);
+      const result = Fido2Decoder.decodeAuthenticatorData(makeAuthData(0x41, attested));
+      expect(result.flags.AT).toBe(true);
+      expect(result.attestedCredentialData).not.toBeNull();
+      expect(result.attestedCredentialData.credentialIdLength).toBe(0);
+      expect(result.attestedCredentialData.aaguid).toBe('00000000-0000-0000-0000-000000000000');
+    });
+  });
+
+  describe('decodeFido2Request - success paths', () => {
+    it('should decode a request containing only clientDataJSON', () => {
+      const clientData = { type: 'webauthn.get', challenge: 'abc', origin: 'https://example.com' };
+      const encoded = btoa(JSON.stringify(clientData)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      const result = Fido2Decoder.decodeFido2Request({ type: 'json', data: { clientDataJSON: encoded } });
+      expect(result.type).toBe('fido2');
+      expect(result.clientDataJSON.type).toBe('webauthn.get');
+      expect(result.clientDataJSON.origin).toBe('https://example.com');
+      expect(result.authenticatorData).toBeNull();
+      expect(result.error).toBeNull();
+    });
+
+    it('should decode a request with both clientDataJSON and authenticatorData', () => {
+      const clientData = { type: 'webauthn.create', challenge: 'xyz', origin: 'https://example.com' };
+      const cdEncoded = btoa(JSON.stringify(clientData)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      const authBytes = new Uint8Array(37);
+      authBytes[32] = 0x05; // UP + UV
+      const adEncoded = btoa(String.fromCharCode(...authBytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      const result = Fido2Decoder.decodeFido2Request({
+        type: 'json',
+        data: { clientDataJSON: cdEncoded, authenticatorData: adEncoded }
+      });
+      expect(result.clientDataJSON.type).toBe('webauthn.create');
+      expect(result.authenticatorData.flags.UV).toBe(true);
+      expect(result.error).toBeNull();
+    });
+
+    it('should capture decode errors in result.error without throwing', () => {
+      // Invalid base64 → JSON parse error propagated to result.error
+      const result = Fido2Decoder.decodeFido2Request({ type: 'json', data: { clientDataJSON: '!!!bad!!!' } });
+      expect(result.error).not.toBeNull();
+    });
+  });
+
+  describe('decodeCBORPublicKey - valid CBOR path', () => {
+    it('should decode a valid CBOR buffer and populate decoded/keyInfo', () => {
+      // 0xa0 = CBOR empty map {}  — decodes to a plain object, triggers keyInfo path
+      const validBuf = new Uint8Array([0xa0]).buffer;
+      const result = Fido2Decoder.decodeCBORPublicKey(validBuf);
+      expect(result.type).toBe('cbor');
+      expect(result.error).toBeNull();
+      expect(result.decoded).toBeDefined();
+      expect(result.keyInfo).toBeDefined();
+    });
   });
 });

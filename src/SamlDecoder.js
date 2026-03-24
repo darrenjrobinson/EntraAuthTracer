@@ -88,6 +88,7 @@ class SamlDecoder {
     writer.close();
 
     const chunks = [];
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -221,7 +222,7 @@ class SamlDecoder {
     };
   }
 
-  static parseLogoutRequest(doc, root) {
+  static parseLogoutRequest(doc, _root) {
     return {
       nameID: SamlDecoder.getText(doc, 'NameID'),
       sessionIndex: SamlDecoder.getText(doc, 'SessionIndex'),
