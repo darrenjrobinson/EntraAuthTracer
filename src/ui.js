@@ -34,6 +34,14 @@ class EntraAuthTracerUI {
 
     // Reset the toolbar icon badge whenever the popup is opened
     chrome.runtime.sendMessage({ action: 'resetBadge' });
+
+    // Populate version and GitHub link in the status bar footer
+    const manifest = chrome.runtime.getManifest();
+    const versionEl = document.getElementById('versionInfo');
+    if (versionEl) {
+      versionEl.innerHTML =
+        `v${manifest.version} &middot; Created by <a class="repo-link" href="https://blog.darrenjrobinson.com" target="_blank" rel="noopener noreferrer">Darren J Robinson</a> &middot; <a class="repo-link" href="https://github.com/DarrenRobinson/EntraAuthTracer" target="_blank" rel="noopener noreferrer">GitHub</a>`;
+    }
   }
 
   // ─── Copy helpers ────────────────────────────────────────────────────────────
@@ -1639,6 +1647,7 @@ class EntraAuthTracerUI {
       case 'fido2_assertion': return 'Authentication (Assertion) - User signing in with existing credential';
       case 'fido2_attestation': return 'Registration (Attestation) - User registering new credential';
       case 'fido2_preflight': return 'Pre-flight Check - Discovering available authenticator options';
+      case 'fido2_webauthn': return 'WebAuthn Endpoint - Challenge or session management';
       default: return 'Unknown FIDO2 Flow';
     }
   }

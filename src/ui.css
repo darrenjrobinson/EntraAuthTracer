@@ -1059,6 +1059,21 @@ body {
   color: var(--text-secondary);
 }
 
+.version-info {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted, var(--text-secondary));
+  white-space: nowrap;
+}
+
+.version-info .repo-link {
+  color: var(--accent-color, #0078D4);
+  text-decoration: none;
+}
+
+.version-info .repo-link:hover {
+  text-decoration: underline;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 8px;
