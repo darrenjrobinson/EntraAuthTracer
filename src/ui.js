@@ -725,12 +725,18 @@ class EntraAuthTracerUI {
   }
 
   /**
-   * Check for CAE capability in request
+   * Check for CAE capability in request by attempting to decode an available JWT.
    */
   checkForCAE(request) {
-    // This will be implemented when JWT decoding is added
-    // For now, return false as placeholder
-    return false;
+    const jwt = this.extractJwtFromRequest(request) ||
+                this.extractJwtFromRequest(request, 'id_token_hint');
+    if (!jwt) return false;
+    try {
+      const decoded = EntraClaimsDecoder.decodeEntraToken(jwt);
+      return decoded && decoded.caeEnabled === true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1620,7 +1626,7 @@ class EntraAuthTracerUI {
       }
     }
 
-    entraClaims.innerHTML = '<div class="empty-state">JWT claims are decoded from <strong>client_assertion</strong> or <strong>id_token_hint</strong> parameters when present. Full access token decoding will be available in Phase 4.</div>';
+    entraClaims.innerHTML = '<div class="empty-state">JWT claims are decoded from <strong>client_assertion</strong> or <strong>id_token_hint</strong> parameters when present in the captured request.</div>';
     this.setSectionHeader('entraClaimsSectionHeader', 'JWT Claims', '');
   }
 

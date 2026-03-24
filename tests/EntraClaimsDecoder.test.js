@@ -261,4 +261,189 @@ describe('EntraClaimsDecoder', () => {
       expect(result.popBinding).toBe(null);
     });
   });
+
+  describe('generateWarnings — comprehensive', () => {
+    it('should warn when token expires within 5 minutes', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        exp: Math.floor(Date.now() / 1000) + 120 // 2 minutes from now
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      const expiryWarn = warnings.find(w => w.type === 'expiry_soon');
+      expect(expiryWarn).toBeDefined();
+      expect(expiryWarn.severity).toBe('warning');
+    });
+
+    it('should not warn about expiry_soon for tokens with > 5 minutes remaining', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        exp: Math.floor(Date.now() / 1000) + 600 // 10 minutes
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      expect(warnings.find(w => w.type === 'expiry_soon')).toBeUndefined();
+    });
+
+    it('should flag long-lived token (> 60 minutes)', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        iat: now - 100,
+        exp: now + 7200 // 2 hours lifetime
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      const longWarn = warnings.find(w => w.type === 'long_lifetime');
+      expect(longWarn).toBeDefined();
+      expect(longWarn.severity).toBe('info');
+      expect(longWarn.message).toMatch(/\d+ minutes/);
+    });
+
+    it('should not flag short-lived token (≤ 60 minutes)', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        iat: now - 100,
+        exp: now + 3500 // ~58 minutes
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      expect(warnings.find(w => w.type === 'long_lifetime')).toBeUndefined();
+    });
+
+    it('should flag guest account (acct=1)', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        acct: 1
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      const guestWarn = warnings.find(w => w.type === 'guest_account');
+      expect(guestWarn).toBeDefined();
+      expect(guestWarn.severity).toBe('info');
+    });
+
+    it('should not flag member account (acct=0)', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        acct: 0
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      expect(warnings.find(w => w.type === 'guest_account')).toBeUndefined();
+    });
+
+    it('should flag public client (azpacr=0)', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        azpacr: 0
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      const publicClient = warnings.find(w => w.type === 'public_client');
+      expect(publicClient).toBeDefined();
+      expect(publicClient.severity).toBe('warning');
+    });
+
+    it('should not flag confidential client (azpacr=1)', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        azpacr: 1
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      expect(warnings.find(w => w.type === 'public_client')).toBeUndefined();
+    });
+
+    it('should warn that CAE is not enabled for Entra tokens without xms_cc', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        tid: 'tenant-id'
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      const caeWarn = warnings.find(w => w.type === 'cae_not_enabled');
+      expect(caeWarn).toBeDefined();
+      expect(caeWarn.severity).toBe('info');
+    });
+
+    it('should not add cae_not_enabled warning when CAE is present', () => {
+      const payload = {
+        iss: 'https://sts.windows.net/tenant/',
+        xms_cc: ['cp1']
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      expect(warnings.find(w => w.type === 'cae_not_enabled')).toBeUndefined();
+    });
+
+    it('should not add cae_not_enabled warning for non-Entra tokens', () => {
+      const payload = {
+        iss: 'https://some-other-idp.example.com/',
+        sub: 'user'
+      };
+
+      const warnings = EntraClaimsDecoder.generateWarnings(payload);
+      expect(warnings.find(w => w.type === 'cae_not_enabled')).toBeUndefined();
+    });
+  });
+
+  describe('decodeAmrValues', () => {
+    it('should decode known AMR values', () => {
+      const result = EntraClaimsDecoder.decodeAmrValues(['pwd', 'mfa']);
+      expect(result).toHaveLength(2);
+      expect(result[0].method).toBe('pwd');
+      expect(result[0].description).toBe('Password');
+      expect(result[1].method).toBe('mfa');
+      expect(result[1].description).toMatch(/Multi-Factor/);
+    });
+
+    it('should handle unknown AMR values gracefully', () => {
+      const result = EntraClaimsDecoder.decodeAmrValues(['unknown_method']);
+      expect(result).toHaveLength(1);
+      expect(result[0].method).toBe('unknown_method');
+      expect(result[0].description).toMatch(/Unknown/);
+    });
+
+    it('should accept a single string instead of array', () => {
+      const result = EntraClaimsDecoder.decodeAmrValues('fido');
+      expect(result).toHaveLength(1);
+      expect(result[0].description).toMatch(/FIDO2/);
+    });
+
+    it('should return empty array for null/undefined input', () => {
+      expect(EntraClaimsDecoder.decodeAmrValues(null)).toEqual([]);
+      expect(EntraClaimsDecoder.decodeAmrValues(undefined)).toEqual([]);
+    });
+
+    it('should decode wia (Windows Integrated Auth)', () => {
+      const result = EntraClaimsDecoder.decodeAmrValues(['wia']);
+      expect(result[0].description).toMatch(/Windows Integrated/);
+    });
+
+    it('should decode ngcmfa (Windows Hello for Business)', () => {
+      const result = EntraClaimsDecoder.decodeAmrValues(['ngcmfa']);
+      expect(result[0].description).toMatch(/Windows Hello/);
+    });
+  });
+
+  describe('formatClaimValue — AMR and platform', () => {
+    it('should decode AMR array to human-readable labels', () => {
+      const formatted = EntraClaimsDecoder.formatClaimValue('amr', ['pwd', 'mfa']);
+      expect(formatted).toContain('pwd');
+      expect(formatted).toContain('Password');
+      expect(formatted).toContain('mfa');
+    });
+
+    it('should decode platf claim to OS name', () => {
+      expect(EntraClaimsDecoder.formatClaimValue('platf', '2')).toMatch(/Windows/);
+      expect(EntraClaimsDecoder.formatClaimValue('platf', 5)).toMatch(/iOS/);
+      expect(EntraClaimsDecoder.formatClaimValue('platf', '6')).toMatch(/Android/);
+    });
+
+    it('should return raw value for unknown platform code', () => {
+      expect(EntraClaimsDecoder.formatClaimValue('platf', '99')).toBe('99');
+    });
+  });
 });

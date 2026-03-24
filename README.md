@@ -27,11 +27,15 @@ A Chromium-based browser extension for deep inspection of Microsoft Entra (Azure
 - **Security Warnings**: Per-flow security assessment with error/warning/info severity levels surfaced in the UI
 - **OAuthDecoder Module**: Standalone `src/OAuthDecoder.js` module (354 lines) with full test coverage in `tests/OAuthDecoder.test.js` (90 tests, 3 suites)
 
-### 🔄 Phase 4 - Entra Claims Decoder (PLANNED)
-- **CAE Detection**: Continuous Access Evaluation badge and analysis
-- **PoP Binding**: Proof-of-Possession token binding inspection
-- **Claims Registry**: Human-readable Entra-specific JWT claims
-- **Token Analysis**: Expiry warnings and security assessments
+### ✅ Phase 4 - Entra Claims Decoder (COMPLETED)
+- **Expanded Claims Registry**: 40+ Entra-specific JWT claims mapped with human-readable labels and tooltips, including device claims (`deviceid`, `platf`, `ipaddr`, `ctry`), token internals (`uti`, `rh`, `sid`, `at_hash`, `c_hash`), and user claims (`unique_name`, `login_hint`, `puid`, `onprem_sid`)
+- **AMR Decoding**: 18 Authentication Method Reference values decoded to plain English (Password, FIDO2/Passkey, Windows Hello for Business, SMS OTP, Windows Integrated Auth, Federated IdP, and more)
+- **Device Platform Decoding**: `platf` claim decoded to OS name (Windows, iOS, Android, macOS, Windows Phone)
+- **CAE Detection**: Continuous Access Evaluation capability badge wired to live JWT decoding — tab badge and `checkForCAE()` now reflect actual token state
+- **PoP Binding**: Proof-of-Possession `cnf` / `jkt` thumbprint surfaced in the Entra tab summary bar
+- **Comprehensive Security Warnings**: Six assessments per token — expired, expiring soon (< 5 min), long-lived lifetime (> 60 min), guest account (`acct=1`), public client (`azpacr=0`), and CAE-not-enabled hint
+- **`decodeAmrValues()` API**: Public method returns structured `{ method, description }` pairs for programmatic AMR inspection
+- **EntraClaimsDecoder Module**: `src/EntraClaimsDecoder.js` with full test coverage in `tests/EntraClaimsDecoder.test.js` (110 tests across all suites)
 
 ### 🔄 Phase 5 - Enhanced UI & Export (PLANNED)
 - **Modern Interface**: Microsoft Fluent-inspired design
@@ -185,7 +189,7 @@ This is a fork of [SimpleSAMLphp SAML-tracer](https://github.com/SimpleSAMLphp/S
 
 - [x] **Phase 2**: Complete FIDO2 CBOR decoding with `cbor-web` integration
 - [x] **Phase 3**: Implement OAuth 2.1 flow detection and device code correlation
-- [ ] **Phase 4**: Add comprehensive Entra JWT claims registry and CAE detection
+- [x] **Phase 4**: Add comprehensive Entra JWT claims registry and CAE detection
 - [ ] **Phase 5**: Build enhanced UI with export capabilities and Fluent design
 
 ## License
@@ -206,6 +210,6 @@ For issues, feature requests, or questions:
 
 ---
 
-**Version**: 1.0.0 (Phase 1 - Foundation)  
+**Version**: 1.0.0 (Phase 4 - Entra Claims Decoder)  
 **Browser Support**: Chrome 88+, Edge 88+  
 **Manifest Version**: 2 (MV3 migration planned for future release)
