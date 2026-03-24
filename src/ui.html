@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Entra Auth Tracer</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <h1 class="title">
+        <img src="../icons/icon32.png" alt="Entra Auth Tracer" class="logo" onerror="this.style.display='none'">
+        Entra Auth Tracer
+      </h1>
+      <div class="controls">
+        <button id="clearBtn" class="btn btn-secondary" title="Clear all requests">Clear</button>
+        <button id="exportBtn" class="btn btn-primary" title="Export traces">Export</button>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="search-bar">
+        <input type="text" id="searchInput" placeholder="Search requests..." class="search-input">
+      </div>
+      <div class="filters">
+        <select id="methodFilter" class="filter-select">
+          <option value="">All Methods</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+        </select>
+        <select id="flowFilter" class="filter-select">
+          <option value="">All Flows</option>
+          <option value="saml">SAML</option>
+          <option value="oauth">OAuth</option>
+          <option value="fido2">FIDO2</option>
+          <option value="device_code">Device Code</option>
+        </select>
+        <select id="statusFilter" class="filter-select">
+          <option value="">All Status</option>
+          <option value="completed">Success</option>
+          <option value="error">Error</option>
+          <option value="pending">Pending</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Request List -->
+      <div class="request-list-container">
+        <div class="request-list-header">
+          <span class="col-timestamp">Time</span>
+          <span class="col-method">Method</span>
+          <span class="col-url">URL</span>
+          <span class="col-status">Status</span>
+          <span class="col-flow">Flow</span>
+        </div>
+        <div id="requestList" class="request-list">
+          <div class="no-requests">
+            <p>No authentication requests captured yet.</p>
+            <p class="hint">Navigate to a Microsoft Entra login or perform SAML authentication to start tracing.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pane Splitter - drag to resize between list and detail -->
+      <div class="pane-splitter" id="paneSplitter" style="display: none;"></div>
+
+      <!-- Detail Panel -->
+      <div id="detailPanel" class="detail-panel" style="display: none;">
+        <div class="detail-header">
+          <h3 id="detailTitle">Request Details</h3>
+          <button id="closeDetailBtn" class="btn btn-close">&times;</button>
+        </div>
+        
+        <!-- Tab Navigation -->
+        <div class="tab-nav">
+          <button class="tab-btn active" data-tab="http">HTTP</button>
+          <button class="tab-btn" data-tab="parameters">Parameters</button>
+          <button class="tab-btn" data-tab="saml">SAML</button>
+          <button class="tab-btn" data-tab="entra" style="display: none;">
+            Entra
+            <span class="cae-badge" style="display: none;">CAE</span>
+          </button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+          <!-- HTTP Tab -->
+          <div id="httpTab" class="tab-pane active">
+            <div class="section">
+              <h4>Request</h4>
+              <div id="requestDetails" class="details-grid">
+                <!-- Request details will be populated here -->
+              </div>
+            </div>
+            
+            <div class="section">
+              <h4>Response</h4>
+              <div id="responseDetails" class="details-grid">
+                <!-- Response details will be populated here -->
+              </div>
+            </div>
+
+            <!-- FIDO2 Section (conditional) -->
+            <div id="fido2Section" class="section" style="display: none;">
+              <h4>FIDO2 / Passkey Details</h4>
+              <div id="fido2Details" class="fido2-details">
+                <!-- FIDO2 details will be populated here -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Parameters Tab -->
+          <div id="parametersTab" class="tab-pane">
+            <div class="section">
+              <h4>URL Parameters</h4>
+              <div id="urlParameters" class="parameters-grid">
+                <!-- URL parameters will be populated here -->
+              </div>
+            </div>
+            
+            <div class="section">
+              <h4>Form Data / Request Body</h4>
+              <div id="requestBody" class="parameters-grid">
+                <!-- Request body will be populated here -->
+              </div>
+            </div>
+
+            <!-- Device Code Timeline (conditional) -->
+            <div id="deviceCodeTimeline" class="section" style="display: none;">
+              <h4>Device Code Flow Timeline</h4>
+              <div id="deviceCodeDetails" class="timeline">
+                <!-- Device code timeline will be populated here -->
+              </div>
+            </div>
+          </div>
+
+          <!-- SAML Tab -->
+          <div id="samlTab" class="tab-pane">
+            <div class="section">
+              <h4>SAML Request</h4>
+              <div id="samlRequest" class="saml-content">
+                <!-- SAML request will be populated here -->
+              </div>
+            </div>
+            
+            <div class="section">
+              <h4>SAML Response</h4>
+              <div id="samlResponse" class="saml-content">
+                <!-- SAML response will be populated here -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Entra Tab -->
+          <div id="entraTab" class="tab-pane">
+            <!-- Summary Section -->
+            <div class="section">
+              <h4>Summary</h4>
+              <div id="entraSummary" class="entra-summary">
+                <!-- Entra summary will be populated here -->
+              </div>
+            </div>
+
+            <!-- Claims Table -->
+            <div class="section">
+              <h4>JWT Claims</h4>
+              <div id="entraClaims" class="claims-table">
+                <!-- Entra claims will be populated here -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Status Bar -->
+    <footer class="status-bar">
+      <span id="statusText">Ready</span>
+      <span id="requestCount">0 requests</span>
+    </footer>
+  </div>
+
+  <!-- Popup resize handle - drag bottom-right corner to resize popup height -->
+  <div id="resizeHandle" class="resize-handle" title="Drag to resize popup"></div>
+
+  <script src="ui.js"></script>
+</body>
+</html>

@@ -1,0 +1,101 @@
+{
+  "name": "entra-auth-tracer",
+  "version": "1.0.0",
+  "description": "Browser extension for deep inspection of Microsoft Entra authentication and identity traffic",
+  "author": "Darren J Robinson",
+  "license": "BSD-2-Clause",
+  "homepage": "https://github.com/DarrenRobinson/EntraAuthTracer",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DarrenRobinson/EntraAuthTracer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DarrenRobinson/EntraAuthTracer/issues"
+  },
+  "keywords": [
+    "entra",
+    "azure-ad",
+    "authentication",
+    "authorization",
+    "identity",
+    "entra id",
+    "oauth",
+    "saml",
+    "fido2",
+    "passkey",
+    "jwt",
+    "browser-extension",
+    "chrome-extension",
+    "edge-extension",
+    "debugging"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "scripts": {
+    "build": "npm run generate-icons && webpack --mode production",
+    "generate-icons": "node scripts/generate-icons.js",
+    "dev": "webpack --mode development --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint src/**/*.js",
+    "package": "npm run build && web-ext build"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0",
+    "babel-loader": "^9.1.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "css-loader": "^6.8.0",
+    "eslint": "^8.50.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "jimp": "^1.6.0",
+    "style-loader": "^3.3.0",
+    "web-ext": "^7.8.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0"
+  },
+  "dependencies": {
+    "cbor-web": "^9.0.0"
+  },
+  "babel": {
+    "presets": [
+      "@babel/preset-env"
+    ]
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setup.js"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/ui.js"
+    ]
+  },
+  "eslintConfig": {
+    "env": {
+      "browser": true,
+      "webextensions": true,
+      "es2021": true,
+      "jest": true
+    },
+    "extends": [
+      "eslint:recommended"
+    ],
+    "parserOptions": {
+      "ecmaVersion": 12,
+      "sourceType": "module"
+    },
+    "rules": {
+      "no-unused-vars": [
+        "error",
+        {
+          "argsIgnorePattern": "^_"
+        }
+      ],
+      "no-console": "warn"
+    }
+  }
+}
