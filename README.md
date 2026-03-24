@@ -37,11 +37,13 @@ A Chromium-based browser extension for deep inspection of Microsoft Entra (Azure
 - **`decodeAmrValues()` API**: Public method returns structured `{ method, description }` pairs for programmatic AMR inspection
 - **EntraClaimsDecoder Module**: `src/EntraClaimsDecoder.js` with full test coverage in `tests/EntraClaimsDecoder.test.js` (110 tests across all suites)
 
-### 🔄 Phase 5 - Enhanced UI & Export (PLANNED)
-- **Modern Interface**: Microsoft Fluent-inspired design
-- **Multi-format Export**: JSON, Markdown, TXT, PDF export options
-- **Flow Correlation**: Visual linking of related requests
-- **Advanced Filtering**: Search, timeline, and flow-type filters
+### ✅ Phase 5 - Enhanced UI & Export (COMPLETE)
+- **Modern Interface**: Microsoft Fluent-inspired design with full dark-mode support and ARIA roles throughout
+- **Multi-format Export**: JSON, Markdown, TXT, and PDF (print-optimised HTML) export options
+- **Timeline View**: Toggle between list and timeline modes; correlated requests grouped into flow cards showing step sequence and duration
+- **Flow Correlation**: Automatic detection of related requests (Device Code sessions, OAuth clientId windows); soft-highlight in list and a "Flow" chip strip in the detail header
+- **Status Bar Breakdown**: Live per-category request counts (SAML, OAuth, FIDO2, Device Code) plus error count next to the total
+- **Advanced Filtering**: Real-time search, method, flow-type, and status filters
 
 ## Installation
 
@@ -190,7 +192,7 @@ This is a fork of [SimpleSAMLphp SAML-tracer](https://github.com/SimpleSAMLphp/S
 - [x] **Phase 2**: Complete FIDO2 CBOR decoding with `cbor-web` integration
 - [x] **Phase 3**: Implement OAuth 2.1 flow detection and device code correlation
 - [x] **Phase 4**: Add comprehensive Entra JWT claims registry and CAE detection
-- [ ] **Phase 5**: Build enhanced UI with export capabilities and Fluent design
+- [x] **Phase 5**: Build enhanced UI with export capabilities and Fluent design
 
 ## License
 

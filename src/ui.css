@@ -1332,3 +1332,249 @@ body.no-select * {
     border-top: none; /* splitter element provides the visual separator */
   }
 }
+
+/* ─── Phase 5: View Toggle ─────────────────────────────────────────────────── */
+
+.view-toggle {
+  display: flex;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.view-btn {
+  padding: 5px 10px;
+  font-size: var(--font-size-sm);
+  border: none;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  border-right: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.view-btn:last-child {
+  border-right: none;
+}
+
+.view-btn.active {
+  background: var(--primary-blue);
+  color: #fff;
+}
+
+.view-btn:not(.active):hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ─── Phase 5: Timeline View ───────────────────────────────────────────────── */
+
+/* Wrapper injected by renderTimeline() */
+.timeline-view {
+  padding: var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+/* A multi-request flow group */
+.flow-group {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.flow-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 6px var(--spacing-md);
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.flow-group-title {
+  flex: 1;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-group-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+/* Individual step inside a flow group */
+.flow-group-item {
+  display: grid;
+  grid-template-columns: 22px 90px 48px 1fr auto auto;
+  gap: var(--spacing-xs);
+  padding: 5px var(--spacing-md);
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  align-items: center;
+  transition: background-color 0.15s;
+}
+
+.flow-group-item:last-child {
+  border-bottom: none;
+}
+
+.flow-group-item:hover {
+  background-color: var(--bg-secondary);
+}
+
+.flow-group-item.selected {
+  background-color: var(--primary-blue);
+  color: #fff;
+}
+
+.fgi-step {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.flow-group-item.selected .fgi-step {
+  background: rgba(255,255,255,0.2);
+  border-color: rgba(255,255,255,0.4);
+  color: #fff;
+}
+
+.fgi-time {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.fgi-method {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.fgi-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fgi-status {
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.fgi-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-group-item.selected .fgi-time,
+.flow-group-item.selected .fgi-method,
+.flow-group-item.selected .fgi-desc,
+.flow-group-item.selected .fgi-status {
+  color: rgba(255,255,255,0.8);
+}
+
+/* Wrapper for a standalone (single-request) item in timeline */
+.timeline-standalone {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* ─── Phase 5: Flow Correlation ────────────────────────────────────────────── */
+
+/* Soft highlight for requests correlated with the selected one */
+.request-item.correlated-highlight {
+  background-color: #e6f2fa;
+}
+
+.request-item.correlated-highlight .flow-badge {
+  background-color: rgba(0, 120, 212, 0.12);
+  color: var(--primary-blue);
+}
+
+@media (prefers-color-scheme: dark) {
+  .request-item.correlated-highlight {
+    background-color: rgba(0, 120, 212, 0.12);
+  }
+}
+
+/* Related Requests panel between tab-nav and tab-content */
+.related-requests-panel {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 5px var(--spacing-md);
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: var(--font-size-sm);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.related-label {
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.related-list {
+  display: flex;
+  gap: var(--spacing-xs);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.related-item {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.related-item:hover {
+  border-color: var(--primary-blue);
+  color: var(--primary-blue);
+}
+
+.related-item.related-current {
+  background-color: var(--primary-blue);
+  border-color: var(--primary-blue);
+  color: #fff;
+  font-weight: 600;
+  cursor: default;
+}

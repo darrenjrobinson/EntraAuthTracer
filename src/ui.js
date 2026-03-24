@@ -12,6 +12,7 @@ class EntraAuthTracerUI {
   constructor() {
     this.currentRequests = [];
     this.selectedRequest = null;
+    this.viewMode = 'list'; // 'list' | 'timeline'
     this.filters = {
       search: '',
       method: '',
@@ -90,6 +91,10 @@ class EntraAuthTracerUI {
       e.stopPropagation();
       this.copyToClipboard(btn.dataset.copy || '', btn);
     });
+
+    // View mode toggle (List ↔ Timeline)
+    document.getElementById('viewListBtn').addEventListener('click', () => this.setViewMode('list'));
+    document.getElementById('viewTimelineBtn').addEventListener('click', () => this.setViewMode('timeline'));
 
     // Search and filters
     document.getElementById('searchInput').addEventListener('input', (e) => {
@@ -239,6 +244,11 @@ class EntraAuthTracerUI {
       case 'txt': {
         const content = this.buildTxtExport(requests, now);
         this.downloadFile(content, `entra-auth-trace_${ts}.txt`, 'text/plain');
+        break;
+      }
+      case 'pdf': {
+        const content = this.buildPdfHtml(requests, now);
+        this.downloadFile(content, `entra-auth-trace_${ts}.html`, 'text/html');
         break;
       }
     }
@@ -492,6 +502,145 @@ class EntraAuthTracerUI {
     return lines.join('\n');
   }
 
+  // ─── PDF / Print HTML export ─────────────────────────────────────────────────
+
+  /**
+   * Build a print-optimised HTML report.
+   * Saved as .html — user opens the file and presses Ctrl+P to save as PDF.
+   */
+  buildPdfHtml(requests, now) {
+    const e = (v) => String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const ts = now.toUTCString();
+
+    // Flow statistics
+    const flowCounts = {};
+    const statusCounts = { completed: 0, error: 0, pending: 0 };
+    for (const r of requests) {
+      const cat = this.getFlowTypeCategory(r.flowType);
+      flowCounts[cat] = (flowCounts[cat] || 0) + 1;
+      if (r.status in statusCounts) statusCounts[r.status]++;
+    }
+
+    const summaryRows = Object.entries(flowCounts)
+      .map(([flow, count]) => `<tr><td>${e(flow.toUpperCase())}</td><td>${count}</td></tr>`)
+      .join('');
+
+    const requestSections = requests.map((r, i) => {
+      let pathname = r.url || '';
+      let hostname = '';
+      try { const u = new URL(r.url); pathname = u.pathname; hostname = u.hostname; } catch { /* keep */ }
+
+      let sec = `
+        <div class="req-section">
+          <h3>Request ${i + 1}: <span class="method">${e(r.method || 'GET')}</span> ${e(pathname)}</h3>
+          <p class="req-host">${e(hostname)}</p>
+          <table>
+            <tr><td class="lbl">Timestamp</td><td>${e(new Date(r.timestamp).toISOString())}</td></tr>
+            <tr><td class="lbl">URL</td><td class="url-cell">${e(r.url)}</td></tr>
+            <tr><td class="lbl">Flow Type</td><td>${e(r.flowType)}</td></tr>
+            <tr><td class="lbl">Status</td><td class="${r.status === 'completed' ? 'ok' : r.status === 'error' ? 'err' : ''}">${e(r.status)}${r.statusCode ? ' (' + r.statusCode + ')' : ''}</td></tr>
+            ${r.error ? `<tr><td class="lbl">Error</td><td class="err">${e(r.error)}</td></tr>` : ''}
+          </table>`;
+
+      if (r.oauthAnalysis && !r.oauthAnalysis.error) {
+        const a = r.oauthAnalysis;
+        sec += `
+          <h4>OAuth 2.1 Analysis</h4>
+          <table>
+            ${a.label      ? `<tr><td class="lbl">Grant Type</td><td>${e(a.label)}</td></tr>` : ''}
+            ${a.clientId   ? `<tr><td class="lbl">Client ID</td><td class="mono">${e(a.clientId)}</td></tr>` : ''}
+            ${a.redirectUri ? `<tr><td class="lbl">Redirect URI</td><td>${e(a.redirectUri)}</td></tr>` : ''}
+            ${a.pkce       ? `<tr><td class="lbl">PKCE</td><td>${e(a.pkce.codeChallengeMethod)}${a.pkce.isS256 ? ' ✓ S256' : ' ⚠ non-S256'}</td></tr>` : ''}
+            ${a.scopes && a.scopes.length ? `<tr><td class="lbl">Scopes</td><td>${e(a.scopes.join(' '))}</td></tr>` : ''}
+            ${a.warnings && a.warnings.length ? `<tr><td class="lbl">Warnings</td><td class="warn">${a.warnings.map(w => e('[' + w.severity.toUpperCase() + '] ' + w.message)).join('<br>')}</td></tr>` : ''}
+          </table>`;
+      }
+
+      if (r.fido2Analysis && !r.fido2Analysis.error && r.fido2Analysis.clientDataJSON) {
+        const cd = r.fido2Analysis.clientDataJSON;
+        sec += `
+          <h4>FIDO2 Analysis</h4>
+          <table>
+            <tr><td class="lbl">Type</td><td>${e(cd.type)}</td></tr>
+            <tr><td class="lbl">Origin</td><td>${e(cd.origin)}</td></tr>
+            <tr><td class="lbl">Cross Origin</td><td>${cd.crossOrigin ? 'Yes' : 'No'}</td></tr>
+          </table>`;
+      }
+
+      sec += '</div>';
+      return sec;
+    }).join('<hr class="req-hr">');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Entra Auth Trace Report</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #323130; background: #fff; padding: 24px; max-width: 900px; margin: 0 auto; }
+    .print-hint { background: #0078d4; color: #fff; padding: 10px 16px; border-radius: 4px; margin-bottom: 20px; font-size: 13px; display: flex; align-items: center; gap: 10px; }
+    .print-hint kbd { background: rgba(255,255,255,0.2); padding: 2px 7px; border-radius: 3px; font-family: inherit; }
+    h1 { font-size: 20px; color: #0078d4; border-bottom: 2px solid #0078d4; padding-bottom: 8px; margin-bottom: 16px; }
+    h2 { font-size: 15px; color: #323130; margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #edebe9; }
+    h3 { font-size: 13px; color: #0078d4; margin: 0 0 4px; }
+    h4 { font-size: 11px; color: #605e5c; margin: 10px 0 4px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+    .meta { color: #605e5c; font-size: 12px; margin-bottom: 16px; }
+    .stats { display: flex; gap: 24px; margin-bottom: 16px; flex-wrap: wrap; }
+    .stat { text-align: center; min-width: 80px; }
+    .stat-val { font-size: 28px; font-weight: 700; color: #0078d4; line-height: 1; }
+    .stat-val.ok { color: #107c10; }
+    .stat-val.err { color: #d13438; }
+    .stat-lbl { font-size: 11px; color: #605e5c; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+    th { background: #f3f2f1; text-align: left; padding: 5px 8px; font-size: 11px; color: #605e5c; font-weight: 700; border-bottom: 1px solid #d2d0ce; }
+    td { padding: 4px 8px; border-bottom: 1px solid #edebe9; vertical-align: top; font-size: 12px; }
+    td.lbl { font-weight: 600; color: #605e5c; width: 130px; white-space: nowrap; }
+    .url-cell { word-break: break-all; font-family: 'Consolas', monospace; font-size: 10px; }
+    .mono { font-family: 'Consolas', monospace; font-size: 11px; }
+    .method { font-family: 'Consolas', monospace; font-weight: 700; }
+    .ok { color: #107c10; font-weight: 600; }
+    .err { color: #d13438; }
+    .warn { color: #ff8c00; }
+    .req-section { margin: 16px 0; padding: 12px 14px; border: 1px solid #edebe9; border-radius: 4px; }
+    .req-host { font-size: 11px; color: #605e5c; margin-bottom: 6px; }
+    hr.req-hr { border: none; border-top: 2px solid #edebe9; margin: 4px 0; }
+    .footer { margin-top: 28px; font-size: 11px; color: #605e5c; text-align: center; padding-top: 10px; border-top: 1px solid #edebe9; }
+    @media print {
+      .print-hint { display: none !important; }
+      .req-section { page-break-inside: avoid; }
+      body { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-hint">
+    &#128196; To save as PDF: press <kbd>Ctrl+P</kbd> (or &#8984;P), then choose <em>Save as PDF</em> as the destination.
+  </div>
+  <h1>&#128274; Entra Auth Trace Report</h1>
+  <p class="meta">Generated: <strong>${e(ts)}</strong> &nbsp;&middot;&nbsp; Entra Auth Tracer v1.0.0 &nbsp;&middot;&nbsp; <strong>${requests.length}</strong> request${requests.length !== 1 ? 's' : ''}</p>
+
+  <h2>Session Summary</h2>
+  <div class="stats">
+    <div class="stat"><div class="stat-val">${requests.length}</div><div class="stat-lbl">Total</div></div>
+    <div class="stat"><div class="stat-val ok">${statusCounts.completed}</div><div class="stat-lbl">Completed</div></div>
+    <div class="stat"><div class="stat-val err">${statusCounts.error}</div><div class="stat-lbl">Errors</div></div>
+    <div class="stat"><div class="stat-val" style="color:#ff8c00">${statusCounts.pending}</div><div class="stat-lbl">Pending</div></div>
+  </div>
+  <table>
+    <tr><th>Flow Type</th><th>Count</th></tr>
+    ${summaryRows}
+  </table>
+
+  <h2>Request Details</h2>
+  ${requestSections}
+
+  <div class="footer">Generated by <strong>Entra Auth Tracer</strong> &mdash; Microsoft Entra authentication inspector</div>
+</body>
+</html>`;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
 
   /**
@@ -499,45 +648,34 @@ class EntraAuthTracerUI {
    */
   filterAndRender() {
     const hasFilters = this.filters.search || this.filters.method || this.filters.flow || this.filters.status;
-    if (hasFilters) {
-      this.filterRequests();
+    const requests = hasFilters ? this._applyFilters(this.currentRequests) : this.currentRequests;
+    if (this.viewMode === 'timeline') {
+      this.renderTimeline(requests);
     } else {
-      this.renderRequestList();
+      this.renderRequestList(requests);
     }
   }
 
   /**
-   * Filter requests based on current filters
+   * Return a filtered subset of requests matching all active filters.
    */
-  filterRequests() {
-    const filtered = this.currentRequests.filter(req => {
-      // Search filter
-      if (this.filters.search && !req.url.toLowerCase().includes(this.filters.search.toLowerCase())) {
-        return false;
-      }
-
-      // Method filter
-      if (this.filters.method && req.method !== this.filters.method) {
-        return false;
-      }
-
-      // Flow filter
+  _applyFilters(requests) {
+    return requests.filter(req => {
+      if (this.filters.search && !req.url.toLowerCase().includes(this.filters.search.toLowerCase())) return false;
+      if (this.filters.method && req.method !== this.filters.method) return false;
       if (this.filters.flow) {
-        const flowType = this.getFlowTypeCategory(req.flowType);
-        if (flowType !== this.filters.flow) {
-          return false;
-        }
+        if (this.getFlowTypeCategory(req.flowType) !== this.filters.flow) return false;
       }
-
-      // Status filter
-      if (this.filters.status && req.status !== this.filters.status) {
-        return false;
-      }
-
+      if (this.filters.status && req.status !== this.filters.status) return false;
       return true;
     });
+  }
 
-    this.renderRequestList(filtered);
+  /**
+   * Filter requests based on current filters (kept for back-compat callers)
+   */
+  filterRequests() {
+    this.filterAndRender();
   }
 
   /**
@@ -553,9 +691,283 @@ class EntraAuthTracerUI {
     return 'other';
   }
 
+  // ─── View mode ────────────────────────────────────────────────────────────────
+
   /**
-   * Render the request list
+   * Switch between 'list' and 'timeline' view modes.
    */
+  setViewMode(mode) {
+    this.viewMode = mode;
+
+    const listBtn = document.getElementById('viewListBtn');
+    const timelineBtn = document.getElementById('viewTimelineBtn');
+    const listHeader = document.querySelector('.request-list-header');
+
+    listBtn.classList.toggle('active', mode === 'list');
+    listBtn.setAttribute('aria-pressed', String(mode === 'list'));
+    timelineBtn.classList.toggle('active', mode === 'timeline');
+    timelineBtn.setAttribute('aria-pressed', String(mode === 'timeline'));
+
+    if (listHeader) listHeader.style.display = mode === 'timeline' ? 'none' : '';
+
+    this.filterAndRender();
+  }
+
+  // ─── Timeline view ────────────────────────────────────────────────────────────
+
+  /**
+   * Group requests into correlated flow groups for the timeline view.
+   * Returns an array of { type, key, label, requests[] } objects.
+   */
+  computeFlowGroups(requests) {
+    const groups = [];
+    const assignedIds = new Set();
+
+    // 1. Device Code correlation groups (keyed by deviceCodeCorrelationKey)
+    const dcMap = new Map();
+    for (const r of requests) {
+      if (r.deviceCodeCorrelationKey) {
+        if (!dcMap.has(r.deviceCodeCorrelationKey)) dcMap.set(r.deviceCodeCorrelationKey, []);
+        dcMap.get(r.deviceCodeCorrelationKey).push(r);
+        assignedIds.add(r.id);
+      }
+    }
+    for (const [key, reqs] of dcMap) {
+      const sorted = reqs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      const clientId = (sorted[0].oauthAnalysis && sorted[0].oauthAnalysis.clientId)
+        ? sorted[0].oauthAnalysis.clientId.substring(0, 8) + '…'
+        : key.substring(0, 8) + '…';
+      groups.push({ type: 'device_code', key, label: `Device Code — ${clientId}`, requests: sorted });
+    }
+
+    // 2. OAuth flows sharing the same clientId within a 60-second session window
+    const oauthReqs = requests.filter(r =>
+      !assignedIds.has(r.id) && r.oauthAnalysis && !r.oauthAnalysis.error && r.oauthAnalysis.clientId
+    );
+    const byClient = new Map();
+    for (const r of oauthReqs) {
+      const cid = r.oauthAnalysis.clientId;
+      if (!byClient.has(cid)) byClient.set(cid, []);
+      byClient.get(cid).push(r);
+    }
+    for (const [clientId, reqs] of byClient) {
+      const sorted = reqs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      // Split into sessions: any gap > 60s starts a new session
+      let sessionStart = null;
+      let session = [];
+      const flushSession = () => {
+        if (session.length === 0) return;
+        const lbl = session.length === 1
+          ? (session[0].oauthAnalysis.label || 'OAuth Request')
+          : `OAuth Flow — ${session[0].oauthAnalysis.label || clientId.substring(0, 8) + '…'}`;
+        groups.push({ type: 'oauth', key: `oauth_${clientId}_${sessionStart}`, label: lbl, requests: session });
+        session = [];
+        sessionStart = null;
+      };
+      for (const r of sorted) {
+        if (sessionStart === null || (r.timestamp - sessionStart) <= 60000) {
+          session.push(r);
+          assignedIds.add(r.id);
+          if (sessionStart === null) sessionStart = r.timestamp;
+        } else {
+          flushSession();
+          session = [r];
+          sessionStart = r.timestamp;
+          assignedIds.add(r.id);
+        }
+      }
+      flushSession();
+    }
+
+    // 3. Remaining requests as standalone (single-item) entries, preserving time order
+    const remaining = requests.filter(r => !assignedIds.has(r.id));
+    for (const r of remaining) {
+      groups.push({ type: 'standalone', key: r.id, label: null, requests: [r] });
+    }
+
+    // Sort groups by the timestamp of their first request
+    groups.sort((a, b) => ((a.requests[0] && a.requests[0].timestamp) || 0) - ((b.requests[0] && b.requests[0].timestamp) || 0));
+
+    return groups;
+  }
+
+  /**
+   * Render a single flow group (multi-request or standalone) in timeline view.
+   */
+  renderFlowGroup(group) {
+    const e = (v) => this.escapeHtml(v);
+
+    if (group.requests.length === 1 && group.type === 'standalone') {
+      // Standalone single-item: render like a plain list item but within timeline container
+      return `<div class="timeline-standalone">${this.renderRequestItem(group.requests[0])}</div>`;
+    }
+
+    const flowBadgeClass = `flow-${group.type === 'device_code' ? 'device_code' : group.type === 'oauth' ? 'oauth' : group.type}`;
+    const flowLabel = group.type === 'device_code' ? 'DEVICE CODE' : group.type.toUpperCase();
+    const startTime = group.requests[0] ? new Date(group.requests[0].timestamp || Date.now()).toLocaleTimeString() : '';
+    const endTime = group.requests.length > 1 ? new Date(group.requests[group.requests.length - 1].timestamp || Date.now()).toLocaleTimeString() : null;
+    const durationMs = group.requests.length > 1
+      ? (group.requests[group.requests.length - 1].timestamp || 0) - (group.requests[0].timestamp || 0)
+      : null;
+    const durationStr = durationMs !== null ? ` · ${(durationMs / 1000).toFixed(1)}s` : '';
+
+    let html = `
+      <div class="flow-group">
+        <div class="flow-group-header">
+          <span class="flow-badge ${flowBadgeClass}">${flowLabel}</span>
+          <span class="flow-group-title">${e(group.label || '')}</span>
+          <span class="flow-group-meta">${startTime}${durationStr} · ${group.requests.length} req</span>
+        </div>`;
+
+    group.requests.forEach((r, idx) => {
+      const time = new Date(r.timestamp || Date.now()).toLocaleTimeString();
+      const status = r.status || 'pending';
+      const statusIcon = status === 'completed' ? '✓' : status === 'error' ? '✗' : '⧖';
+      let shortUrl = r.url || '';
+      try { shortUrl = new URL(r.url).pathname; } catch { /* keep */ }
+      const stepDesc = this._getFlowStepDesc(r, idx);
+      const selectedClass = this.selectedRequest && this.selectedRequest.id === r.id ? ' selected' : '';
+
+      html += `
+        <div class="flow-group-item${selectedClass}" data-request-id="${e(r.id)}">
+          <span class="fgi-step">${idx + 1}</span>
+          <span class="fgi-time">${time}</span>
+          <span class="fgi-method">${e(r.method || 'GET')}</span>
+          <span class="fgi-url" title="${e(r.url)}">${e(shortUrl)}</span>
+          <span class="fgi-status status-${status}">${statusIcon}</span>
+          ${stepDesc ? `<span class="fgi-desc">${e(stepDesc)}</span>` : ''}
+        </div>`;
+    });
+
+    html += '</div>';
+    return html;
+  }
+
+  /**
+   * Return a short step description for a request within a flow group.
+   */
+  _getFlowStepDesc(r, idx) {
+    if (r.flowType === 'device_code_initiation') return 'Initiation';
+    if (r.flowType && r.flowType.startsWith('device_code') && r.status === 'completed') return 'Token issued';
+    if (r.flowType && r.flowType.startsWith('device_code')) return `Poll #${idx}`;
+    if (r.oauthAnalysis && r.oauthAnalysis.label) return r.oauthAnalysis.label;
+    return '';
+  }
+
+  /**
+   * Render all requests in Timeline view: grouped flow sections then standalone items.
+   */
+  renderTimeline(requests = this.currentRequests) {
+    const container = document.getElementById('requestList');
+    if (!container) return;
+
+    if (!requests || requests.length === 0) {
+      container.innerHTML = `
+        <div class="no-requests">
+          <p>No authentication requests captured yet.</p>
+          <p class="hint">Navigate to a Microsoft Entra login or perform SAML authentication to start tracing.</p>
+        </div>`;
+      return;
+    }
+
+    const groups = this.computeFlowGroups(requests);
+    let html = '<div class="timeline-view">';
+    for (const group of groups) html += this.renderFlowGroup(group);
+    html += '</div>';
+    container.innerHTML = html;
+
+    // Bind click events — both flow-group items and fallback standalone list items
+    container.querySelectorAll('[data-request-id]').forEach(el => {
+      el.addEventListener('click', (evt) => {
+        // Prevent the copy-btn inside from triggering a request selection
+        if (evt.target.closest('.copy-btn')) return;
+        const found = requests.find(r => r.id === el.dataset.requestId);
+        if (found) this.selectRequest(found);
+      });
+    });
+  }
+
+  // ─── Flow correlation ────────────────────────────────────────────────────────
+
+  /**
+   * Return requests correlated with the given request (same device code session or
+   * same OAuth clientId within a 60-second window), sorted chronologically.
+   * The request itself is NOT included in the returned array.
+   */
+  findRelatedRequests(request) {
+    const results = [];
+    // Device code
+    if (request.deviceCodeCorrelationKey) {
+      this.currentRequests
+        .filter(r => r.id !== request.id && r.deviceCodeCorrelationKey === request.deviceCodeCorrelationKey)
+        .forEach(r => results.push(r));
+    } else if (request.oauthAnalysis && request.oauthAnalysis.clientId) {
+      // OAuth clientId + 60-second window
+      const cid = request.oauthAnalysis.clientId;
+      const ts = request.timestamp || 0;
+      this.currentRequests
+        .filter(r =>
+          r.id !== request.id &&
+          r.oauthAnalysis && r.oauthAnalysis.clientId === cid &&
+          Math.abs((r.timestamp || 0) - ts) <= 60000
+        )
+        .forEach(r => results.push(r));
+    }
+    return results.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  }
+
+  /**
+   * After selecting a request, apply .correlated-highlight to other list items
+   * that are part of the same flow.
+   */
+  highlightCorrelatedRequests(request) {
+    // Reset any previous highlights
+    document.querySelectorAll('.correlated-highlight').forEach(el => el.classList.remove('correlated-highlight'));
+
+    const related = this.findRelatedRequests(request);
+    if (related.length === 0) return;
+
+    related.forEach(r => {
+      const el = document.querySelector(`[data-request-id="${CSS.escape(r.id)}"]`);
+      if (el && !el.classList.contains('selected')) el.classList.add('correlated-highlight');
+    });
+  }
+
+  /**
+   * Update the Related Requests panel in the detail header.
+   */
+  updateRelatedRequestsPanel(request) {
+    const panel = document.getElementById('relatedRequestsPanel');
+    const list  = document.getElementById('relatedRequestsList');
+    if (!panel || !list) return;
+
+    const related = this.findRelatedRequests(request);
+    const allInFlow = [request, ...related].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    if (allInFlow.length <= 1) {
+      panel.style.display = 'none';
+      return;
+    }
+
+    panel.style.display = 'flex';
+    list.innerHTML = allInFlow.map((r, idx) => {
+      const isCurrent = r.id === request.id;
+      const time = new Date(r.timestamp || Date.now()).toLocaleTimeString();
+      const stepDesc = this._getFlowStepDesc(r, idx) || r.flowType || '';
+      const statusIcon = r.status === 'completed' ? '✓' : r.status === 'error' ? '✗' : '⧖';
+      return `<span class="related-item${isCurrent ? ' related-current' : ''}" data-request-id="${this.escapeHtml(r.id)}" title="${this.escapeHtml(r.url)}">
+        ${statusIcon} ${idx + 1}${stepDesc ? ': ' + this.escapeHtml(stepDesc) : ''}
+      </span>`;
+    }).join('');
+
+    // Clicking a related item navigates to that request
+    list.querySelectorAll('.related-item:not(.related-current)').forEach(el => {
+      el.addEventListener('click', () => {
+        const found = this.currentRequests.find(r => r.id === el.dataset.requestId);
+        if (found) this.selectRequest(found);
+      });
+    });
+  }
   renderRequestList(requests = this.currentRequests) {
     const container = document.getElementById('requestList');
     if (!container) return;
@@ -645,12 +1057,15 @@ class EntraAuthTracerUI {
     this.selectedRequest = request;
     
     // Update selection in list
-    document.querySelectorAll('.request-item').forEach(item => {
+    document.querySelectorAll('.request-item, .flow-group-item').forEach(item => {
       item.classList.remove('selected');
       if (item.dataset.requestId === request.id) {
         item.classList.add('selected');
       }
     });
+
+    // Highlight correlated requests
+    this.highlightCorrelatedRequests(request);
 
     // Show detail panel
     this.showDetailPanel(request);
@@ -680,6 +1095,9 @@ class EntraAuthTracerUI {
 
     // Determine which tabs to show
     this.updateTabVisibility(request);
+
+    // Update related requests panel
+    this.updateRelatedRequestsPanel(request);
 
     // Populate tab content
     this.populateHttpTab(request);
@@ -1713,9 +2131,16 @@ class EntraAuthTracerUI {
     // Hide the pane splitter
     const splitter = document.getElementById('paneSplitter');
     if (splitter) splitter.style.display = 'none';
+
+    // Hide related requests panel
+    const relPanel = document.getElementById('relatedRequestsPanel');
+    if (relPanel) relPanel.style.display = 'none';
+
+    // Clear correlation highlights
+    document.querySelectorAll('.correlated-highlight').forEach(el => el.classList.remove('correlated-highlight'));
     
     // Clear selection
-    document.querySelectorAll('.request-item').forEach(item => {
+    document.querySelectorAll('.request-item, .flow-group-item').forEach(item => {
       item.classList.remove('selected');
     });
     
@@ -1744,14 +2169,34 @@ class EntraAuthTracerUI {
   }
 
   /**
-   * Update status bar
+   * Update status bar with total count and per-flow-category breakdown.
    */
   updateStatusBar() {
     const statusText = document.getElementById('statusText');
     const requestCount = document.getElementById('requestCount');
 
     statusText.textContent = this.currentRequests.length > 0 ? 'Capturing' : 'Ready';
-    requestCount.textContent = `${this.currentRequests.length} requests`;
+
+    if (this.currentRequests.length === 0) {
+      requestCount.textContent = '0 requests';
+      return;
+    }
+
+    const catLabels = { saml: 'SAML', oauth: 'OAuth', fido2: 'FIDO2', device_code: 'Device Code' };
+    const flowCounts = {};
+    let errorCount = 0;
+    for (const r of this.currentRequests) {
+      const cat = this.getFlowTypeCategory(r.flowType);
+      if (catLabels[cat]) flowCounts[cat] = (flowCounts[cat] || 0) + 1;
+      if (r.status === 'error') errorCount++;
+    }
+
+    const parts = [`${this.currentRequests.length} req`];
+    const breakdown = Object.entries(flowCounts).map(([k, v]) => `${catLabels[k]}: ${v}`).join(', ');
+    if (breakdown) parts.push(breakdown);
+    if (errorCount) parts.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
+
+    requestCount.textContent = parts.join(' · ');
   }
   /**
    * Draggable splitter — lets the user resize the request-list vs detail-panel split.

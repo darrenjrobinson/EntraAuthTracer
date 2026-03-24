@@ -5,7 +5,40 @@ All notable changes to the Entra Auth Tracer extension are documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2026-03-24
+## [Unreleased] — Phase 5
+
+### Phase 5 - Polish & Enhanced UI
+
+#### Added
+- **Timeline View**
+  - New view-mode toggle (List / Timeline) in the toolbar
+  - Timeline mode groups requests into flow cards: Device Code sessions, OAuth clientId sessions, and standalone requests
+  - Each flow card shows a header with flow-type badge, session label, start time, duration, and request count
+  - Step-numbered rows inside each card with method, URL path, status icon, and a short step description
+  - Clicking any row in a flow card selects that request and opens the detail panel
+  - Column-header row is automatically hidden in Timeline mode and restored in List mode
+
+- **Flow Correlation**
+  - `findRelatedRequests()` identifies requests correlated by Device Code session key or by matching OAuth `client_id` within a 60-second window
+  - Selecting a request applies a soft blue highlight (`.correlated-highlight`) to all correlated entries in the list
+  - A "Flow" chip strip appears between the detail-panel header and the tab bar listing all requests in the same flow; clicking any chip navigates to that request
+  - Highlights and the flow strip are cleared when the detail panel closes
+
+- **PDF / Print Export**
+  - New "PDF (Print)" option in the Export dropdown
+  - Generates a self-contained print-optimised HTML report with an inline print-to-PDF guide banner
+  - Report includes session summary stats, per-flow breakdown table, and expandable per-request sections (HTTP details, OAuth 2.1 analysis, FIDO2 analysis)
+  - Downloaded as `.html`; opening the file and pressing Ctrl+P saves as PDF via the browser's native print dialog
+
+- **Status Bar Breakdown**
+  - `updateStatusBar()` now shows per-category counts (SAML, OAuth, FIDO2, Device Code) alongside the total and error count
+  - Format: `N req · SAML: x, OAuth: y · N errors`
+
+#### Changed
+- Export menu now contains four options: JSON, Markdown (.md), Plain Text (.txt), PDF (Print)
+- Toolbar layout updated to include the view-mode toggle group before the search bar
+
+
 
 ### Phase 2 - FIDO2 Decoder Implementation
 

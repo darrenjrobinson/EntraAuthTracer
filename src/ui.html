@@ -30,6 +30,9 @@
             <button class="export-menu-item" data-format="txt" role="menuitem">
               <span class="export-menu-icon">TXT</span> Plain Text (.txt)
             </button>
+            <button class="export-menu-item" data-format="pdf" role="menuitem">
+              <span class="export-menu-icon">PDF</span> PDF (Print)
+            </button>
           </div>
         </div>
       </div>
@@ -37,6 +40,10 @@
 
     <!-- Toolbar -->
     <div class="toolbar">
+      <div class="view-toggle" role="group" aria-label="View mode">
+        <button id="viewListBtn" class="view-btn active" title="List view" aria-pressed="true">&#8801; List</button>
+        <button id="viewTimelineBtn" class="view-btn" title="Timeline view" aria-pressed="false">&#9200; Timeline</button>
+      </div>
       <div class="search-bar">
         <input type="text" id="searchInput" placeholder="Search requests..." class="search-input">
       </div>
@@ -96,6 +103,12 @@
           <button id="closeDetailBtn" class="btn btn-close">&times;</button>
         </div>
         
+        <!-- Related Requests Panel (visible when correlated requests exist) -->
+        <div id="relatedRequestsPanel" class="related-requests-panel" style="display:none;">
+          <span class="related-label">Flow:</span>
+          <div id="relatedRequestsList" class="related-list"></div>
+        </div>
+
         <!-- Tab Navigation -->
         <div class="tab-nav">
           <button class="tab-btn active" data-tab="http">HTTP</button>
