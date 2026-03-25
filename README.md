@@ -2,6 +2,8 @@
 
 A Chromium-based browser extension for deep inspection of Microsoft Entra (Azure AD) authentication and identity traffic. Entra Auth Tracer extends the capabilities of SimpleSAMLphp SAML-tracer to support modern Entra authentication flows including FIDO2/Passkey analysis, OAuth 2.1 grant types, and Entra-specific JWT claims decoding.
 
+![Entra Auth Tracer](icons/EntraAuthTracer.png)
+
 ## Features
 
 ### FIDO2 / Passkey Analysis
@@ -70,7 +72,19 @@ A WebAuthn/Passkey flow involves three distinct HTTP phases, all of which are ca
 - **Chrome Web Store**: Search for "Entra Auth Tracer" or install directly from the store listing
 - **Microsoft Edge Add-ons Store**: Search for "Entra Auth Tracer" or install directly from the store listing
 
-### Development Installation (Sideloading)
+### From a GitHub Release (Recommended for testers)
+
+1. Go to the [Releases page](https://github.com/darrenjrobinson/EntraAuthTracer/releases) and download the latest `EntraAuthTracer-vX.X.X.zip`
+2. Unzip the file to a folder on your machine
+3. Open Chrome or Edge and navigate to `chrome://extensions/` or `edge://extensions/`
+4. Enable **Developer mode** (toggle in the top-right corner)
+5. Click **Load unpacked**
+6. Select the unzipped folder
+7. The Entra Auth Tracer icon will appear in your browser toolbar
+
+> **Note**: Because the extension is sideloaded rather than installed from a store, Chrome/Edge may occasionally remind you it is running in developer mode — this is expected and safe to dismiss.
+
+### Development Installation (Sideloading from source)
 
 1. **Clone the repository:**
    ```bash
