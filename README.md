@@ -2,7 +2,7 @@
 
 A Chromium-based browser extension for deep inspection of Microsoft Entra (Azure AD) authentication and identity traffic. Entra Auth Tracer extends the capabilities of SimpleSAMLphp SAML-tracer to support modern Entra authentication flows including FIDO2/Passkey analysis, OAuth 2.1 grant types, and Entra-specific JWT claims decoding.
 
-![Entra Auth Tracer](icons/EntraAuthTracer.png)
+![Entra Auth Tracer](icons/icon128.png)
 
 ## Features
 
