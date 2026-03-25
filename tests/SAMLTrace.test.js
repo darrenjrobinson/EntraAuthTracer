@@ -78,6 +78,10 @@ describe('SAMLTrace', () => {
       expect(samltrace.getFido2Type('fido2_preflight')).toBe('Pre-flight Check');
     });
 
+    it('should describe fido2_webauthn as WebAuthn Endpoint', () => {
+      expect(samltrace.getFido2Type('fido2_webauthn')).toBe('WebAuthn Endpoint');
+    });
+
     it('should return Unknown for unrecognised type', () => {
       expect(samltrace.getFido2Type('something_else')).toBe('Unknown FIDO2 Flow');
     });
@@ -132,6 +136,22 @@ describe('SAMLTrace', () => {
     it('should match /assertion FIDO2 path', () => {
       const url = new URL('https://example.com/webauthn/assertion');
       expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match /passkey/ as a standalone path segment', () => {
+      const url = new URL('https://example.com/passkey/authenticate');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match /passkeys/ as a standalone path segment', () => {
+      const url = new URL('https://example.com/passkeys/challenge');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'GET'))).toBe(true);
+    });
+
+    it('should NOT false-positive on a repo name containing Passkey (regression)', () => {
+      // GitHub repo graph for a repo named "PasskeyProviderAAGUIDs" must NOT be captured
+      const url = new URL('https://github.com/darrenjrobinson/PasskeyProviderAAGUIDs/graphs/participation?h=28&type=sparkline&w=155');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'GET'))).toBe(false);
     });
 
     it('should return false for an unrelated URL', () => {
@@ -194,6 +214,15 @@ describe('SAMLTrace', () => {
     it('should detect generic token endpoint as oauth_token fallback', () => {
       // No body provided → falls through to generic token fallback
       expect(detect('https://login.microsoftonline.com/common/oauth2/v2.0/token', 'POST')).toBe('oauth_token');
+    });
+
+    it('should detect generic webauthn endpoint as fido2_webauthn', () => {
+      // e.g. GitHub /webauthn/challenge — not assertion/attestation/well-known
+      expect(detect('https://github.com/webauthn/challenge', 'POST')).toBe('fido2_webauthn');
+    });
+
+    it('should detect .well-known/webauthn as fido2_preflight over generic fido2_webauthn', () => {
+      expect(detect('https://login.microsoftonline.com/.well-known/webauthn', 'GET')).toBe('fido2_preflight');
     });
   });
 

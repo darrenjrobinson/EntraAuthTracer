@@ -167,10 +167,13 @@ class SAMLTrace {
     ];
 
     // FIDO2/Passkey patterns (NEW)
+    // Note: /passkeys?/ requires the word to be a complete path segment to avoid false
+    // positives from repo/resource names that happen to start with "Passkey" (e.g. GitHub
+    // repository names like /PasskeyProviderAAGUIDs/ would otherwise match).
     const fido2Patterns = [
       /\/assertion/i,
       /\/attestation/i,
-      /\/passkey/i,
+      /\/passkeys?(?:[/?#]|$)/i,
       /\/webauthn/i
     ];
 
@@ -222,6 +225,8 @@ class SAMLTrace {
     if (path.includes('assertion')) return 'fido2_assertion';
     if (path.includes('attestation')) return 'fido2_attestation';
     if (path.includes('webauthn') && path.includes('well-known')) return 'fido2_preflight';
+    // Generic WebAuthn endpoint (e.g. GitHub /webauthn/challenge, /webauthn/assertion/options)
+    if (path.includes('webauthn')) return 'fido2_webauthn';
 
     // Device code endpoint — always initiation (response is what contains device_code)
     if (OAuthDecoder.isDeviceCodeEndpoint(path)) return 'device_code_initiation';
@@ -352,6 +357,7 @@ class SAMLTrace {
       case 'fido2_assertion': return 'Authentication (Assertion)';
       case 'fido2_attestation': return 'Registration (Attestation)';
       case 'fido2_preflight': return 'Pre-flight Check';
+      case 'fido2_webauthn': return 'WebAuthn Endpoint';
       default: return 'Unknown FIDO2 Flow';
     }
   }
