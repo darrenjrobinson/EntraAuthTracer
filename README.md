@@ -1,63 +1,14 @@
 # Entra Auth Tracer
 
-A Chromium-based browser extension for deep inspection of authentication and identity traffic — across Microsoft Entra (Azure AD), Okta, AWS Cognito, Google, ADFS, Shibboleth, IdentityServer/Duende, SAP, and any standards-compliant SAML 2.0, OIDC, or OAuth 2.x provider. Entra Auth Tracer extends the capabilities of SimpleSAMLphp SAML-tracer to support modern authentication flows including FIDO2/Passkey analysis, OAuth 2.1 grant types, HTTP-level client authentication decoding, Entra-specific JWT claims enrichment, and **Entra Verified ID / Decentralised Identity (DID)** flows.
+A Chromium-based browser extension for deep inspection of authentication and identity traffic — across Microsoft Entra (Azure AD), Okta, AWS Cognito, Google, ADFS, Shibboleth, IdentityServer/Duende, SAP, and any standards-compliant SAML 2.0, OIDC, or OAuth 2.x provider. 
+
+Entra Auth Tracer extends the capabilities of SimpleSAMLphp SAML-tracer to support modern authentication flows including FIDO2/Passkey analysis, OAuth 2.1 grant types, HTTP-level client authentication decoding, Entra-specific JWT claims enrichment, and Entra Verified ID / Decentralised Identity (DID) flows.
 
 ![Entra Auth Tracer](icons/icon128.png)
 
+![Entra Auth Tracer — timeline view in popout mode with OAuth flow correlation](<images/Entra Auth Tracer.png>)
+
 ## Features
-
-### Entra Verified ID / Decentralised Identity (DID)
-
-Captures and decodes the full Verified ID lifecycle — issuance, presentation/verification, DID document resolution, and credential status checks.
-
-#### Captured Endpoints
-
-| Host / Pattern | Flow Detected |
-|---|---|
-| `verifiedid.did.msidentity.com/v1.0/verifiableCredentials/createIssuanceRequest` | Issuance request |
-| `verifiedid.did.msidentity.com/v1.0/verifiableCredentials/createPresentationRequest` | Presentation / verification request |
-| `verifiedid.did.msidentity.com/v1.0/verifiableCredentials/request/{id}` | Fetch presentation / issuance request object |
-| `beta.did.msidentity.com/…` | Same operations on the beta endpoint |
-| `did.msidentity.com` | Microsoft DID document host |
-| `resolver.msidentity.com` | Microsoft DID resolver |
-| `resolver.identity.foundation` | DIF universal DID resolver |
-| `request.msidentity.com` | Verified ID request service |
-| `…/statuslist/…` | Credential status list / revocation checks |
-| `…/openid4vp/…` | OpenID for Verifiable Presentations (OID4VP) |
-| `…/openid4vci/…` | OpenID for Verifiable Credential Issuance (OID4VCI) |
-
-#### What the decoder surfaces
-
-- **Operation label** — human-readable name for each API call (e.g. _Create Issuance Request_, _DID Document Resolution_)
-- **Credential type** — the VC type being issued or requested (e.g. `VerifiedEmployee`, `VerifiedID`)
-- **Authority** — the issuer / verifier DID or tenant URL
-- **Requested credentials** — all credential types listed in a presentation request
-- **Request ID** — the transaction identifier used to correlate issuance / presentation steps
-- **DID identifier** — the `did:ion:…` or `did:web:…` value embedded in the URL
-- **Callback URL** — the app endpoint that receives the Verified ID event callback
-- **OpenID4VP/OID4VCI details** — `presentation_definition`, input descriptors, `vp_token` / `id_token` presence, credential format
-- **Warnings** — localhost callback URLs flagged for production readiness; PIN requirement surfaced; QR code mode noted
-
-> **Sign-in with the wallet still uses standard OAuth**: When a user presents a Verified ID credential to sign in, Microsoft Authenticator completes the wallet interaction locally. The issuer's Entra tenant then continues with a normal OIDC/OAuth flow through `login.microsoftonline.com`, which the tracer already captures. Both the Verified ID service calls **and** the resulting OAuth token exchange will appear in the timeline.
-
-### FIDO2 / Passkey Analysis
-- Full CBOR decoding of `clientDataJSON` and `authenticatorData`
-- Authenticator identification — Windows Hello, YubiKey, and other FIDO2 hardware keys via AAGUID recognition
-- Complete FIDO2 binary structure analysis with flag decomposition and credential data extraction
-- EC2 (Elliptic Curve) and RSA key type support with algorithm identification
-- Rich detail display with formatted output and collapsible raw data
-
-#### What you will see during a Passkey sign-in
-
-A WebAuthn/Passkey flow involves three distinct HTTP phases, all of which are captured by the tracer:
-
-| Step | Request | Flow Label | What it contains |
-|------|---------|------------|-----------------|
-| **1. Options / Pre-flight** | `GET /.well-known/webauthn` or `GET /webauthn/challenge` | FIDO2 Pre-flight / WebAuthn Endpoint | Relying Party policy — allowed credentials, user verification requirement, timeout |
-| **2. Assertion POST** | `POST /webauthn/assertion` or `POST /assertion` | FIDO2 — Authentication (Assertion) | `clientDataJSON` (decoded: origin, challenge, type), `authenticatorData` (decoded: RP ID hash, flags UP/UV/AT/BE/BS, sign count), and signature bytes |
-| **3. Token exchange** | `POST /oauth2/v2.0/token` | OAuth — Authorization Code | Access token, ID token, and Entra JWT claims confirming `amr=fido` |
-
-> **Why you won't see the credential itself**: The actual signing step — where the browser hands the challenge to your authenticator (Windows Hello, YubiKey, etc.) and receives back a signed assertion — happens entirely inside the browser platform via the `navigator.credentials.get()` Web API. This exchange never travels over HTTP and therefore cannot be intercepted by any browser extension. What _is_ visible are the challenge fetch and the signed assertion POST that wrap that ceremony.
 
 ### OAuth 2.1 / OIDC Flow Detection
 
@@ -116,28 +67,79 @@ Detects and decodes SAML traffic across a wide range of service providers and id
 | **SAML ECP** | Enhanced Client or Proxy profile — detected on `/ECP/` paths |
 | **WS-Federation** | Full `/wsfederation` path and short `/wsfed` path — `wa=wsignin1.0`/`wsignout1.0` |
 
+### FIDO2 / Passkey Analysis
+- Full CBOR decoding of `clientDataJSON` and `authenticatorData`
+- Authenticator identification — Windows Hello, YubiKey, and other FIDO2 hardware keys via AAGUID recognition
+- Complete FIDO2 binary structure analysis with flag decomposition and credential data extraction
+- EC2 (Elliptic Curve) and RSA key type support with algorithm identification
+- Rich detail display with formatted output and collapsible raw data
+
+#### What you will see during a Passkey sign-in
+
+A WebAuthn/Passkey flow involves three distinct HTTP phases, all of which are captured by the tracer:
+
+| Step | Request | Flow Label | What it contains |
+|------|---------|------------|-----------------|
+| **1. Options / Pre-flight** | `GET /.well-known/webauthn` or `GET /webauthn/challenge` | FIDO2 Pre-flight / WebAuthn Endpoint | Relying Party policy — allowed credentials, user verification requirement, timeout |
+| **2. Assertion POST** | `POST /webauthn/assertion` or `POST /assertion` | FIDO2 — Authentication (Assertion) | `clientDataJSON` (decoded: origin, challenge, type), `authenticatorData` (decoded: RP ID hash, flags UP/UV/AT/BE/BS, sign count), and signature bytes |
+| **3. Token exchange** | `POST /oauth2/v2.0/token` | OAuth — Authorization Code | Access token, ID token, and Entra JWT claims confirming `amr=fido` |
+
+> **Why you won't see the credential itself**: The actual signing step — where the browser hands the challenge to your authenticator (Windows Hello, YubiKey, etc.) and receives back a signed assertion — happens entirely inside the browser platform via the `navigator.credentials.get()` Web API. This exchange never travels over HTTP and therefore cannot be intercepted by any browser extension. What _is_ visible are the challenge fetch and the signed assertion POST that wrap that ceremony.
+
+### Entra Verified ID / Decentralised Identity (DID)
+
+Captures and decodes the full Verified ID lifecycle — issuance, presentation/verification, DID document resolution, and credential status checks.
+
+#### Captured Endpoints
+
+| Host / Pattern | Flow Detected |
+|---|---|
+| `verifiedid.did.msidentity.com/v1.0/verifiableCredentials/createIssuanceRequest` | Issuance request |
+| `verifiedid.did.msidentity.com/v1.0/verifiableCredentials/createPresentationRequest` | Presentation / verification request |
+| `verifiedid.did.msidentity.com/v1.0/verifiableCredentials/request/{id}` | Fetch presentation / issuance request object |
+| `beta.did.msidentity.com/…` | Same operations on the beta endpoint |
+| `did.msidentity.com` | Microsoft DID document host |
+| `resolver.msidentity.com` | Microsoft DID resolver |
+| `resolver.identity.foundation` | DIF universal DID resolver |
+| `request.msidentity.com` | Verified ID request service |
+| `…/statuslist/…` | Credential status list / revocation checks |
+| `…/openid4vp/…` | OpenID for Verifiable Presentations (OID4VP) |
+| `…/openid4vci/…` | OpenID for Verifiable Credential Issuance (OID4VCI) |
+
+#### What the decoder surfaces
+
+- **Operation label** — human-readable name for each API call (e.g. _Create Issuance Request_, _DID Document Resolution_)
+- **Credential type** — the VC type being issued or requested (e.g. `VerifiedEmployee`, `VerifiedID`)
+- **Authority** — the issuer / verifier DID or tenant URL
+- **Requested credentials** — all credential types listed in a presentation request
+- **Request ID** — the transaction identifier used to correlate issuance / presentation steps
+- **DID identifier** — the `did:ion:…` or `did:web:…` value embedded in the URL
+- **Callback URL** — the app endpoint that receives the Verified ID event callback
+- **OpenID4VP/OID4VCI details** — `presentation_definition`, input descriptors, `vp_token` / `id_token` presence, credential format
+- **Warnings** — localhost callback URLs flagged for production readiness; PIN requirement surfaced; QR code mode noted
+
+> **Sign-in with the wallet still uses standard OAuth**: When a user presents a Verified ID credential to sign in, Microsoft Authenticator completes the wallet interaction locally. The issuer's Entra tenant then continues with a normal OIDC/OAuth flow through `login.microsoftonline.com`, which the tracer already captures. Both the Verified ID service calls **and** the resulting OAuth token exchange will appear in the timeline.
+
+
 ### Enhanced UI
 - Microsoft Fluent-inspired design with full dark-mode support and WCAG 2.1 AA accessibility
 - **Multi-format Export**: JSON, Markdown, TXT, and PDF (print-optimised HTML)
+
+  ![Export options — JSON, Markdown, Plain Text and PDF](<images/Entra Auth Tracer - Export.png>)
+
 - **Timeline View**: Toggle between list and timeline modes; correlated requests grouped into flow cards showing step sequence and duration — including Verified ID issuance / presentation sequences
+
+  ![Timeline view with filtered OAuth flows and Entra claims analysis](<images/Entra Auth Tracer - Popout Filters & Entra.png>)
+
 - **Flow Correlation**: Automatic detection of related requests (Device Code sessions, OAuth clientId windows) with soft-highlight in list and a "Flow" chip strip in the detail header
+
+  ![HTTP request detail with multi-step flow correlation chips](<images/Entra Auth Tracer - Detailed Flow.png>)
+
 - **Status Bar Breakdown**: Live per-category request counts (SAML, OAuth, FIDO2, Device Code) plus error count
 - **Advanced Filtering**: Real-time search, method, flow-type, and status filters
 - **Extension Icon Badge**: Live event-counter badge on the toolbar icon — increments on each captured auth event and resets when the popup is opened
 
 ## Supported Authentication Flows
-
-### SAML & Federation
-
-| Flow Type | Description |
-|-----------|-------------|
-| **SAML 2.0 — POST Binding** | Full SAML assertion and request analysis via HTML form POST |
-| **SAML 2.0 — Redirect Binding** | Query-string encoded `SAMLRequest` / `SAMLResponse` |
-| **SAML 2.0 — Artifact Binding** | `SAMLart` artifact resolution |
-| **SAML ECP** | Enhanced Client or Proxy profile for non-browser SAML |
-| **ADFS SAML** | Microsoft ADFS `/adfs/ls/` endpoint |
-| **Shibboleth SP** | Shibboleth `/Shibboleth.sso/` ACS and logout endpoints |
-| **WS-Federation** | WS-Fed `wresult` payload decoding — full `/wsfederation` and short `/wsfed` paths |
 
 ### OAuth 2.x / OIDC
 
@@ -155,6 +157,18 @@ Detects and decodes SAML traffic across a wide range of service providers and id
 | **OIDC Logout** | `/endsession` and `/connect/endsession` |
 | **Okta Classic AuthN** | Okta `api/v1/authn` primary auth flow |
 | **Okta Identity Engine (OIE)** | Okta `idp/idx` pipeline |
+
+### SAML & Federation
+
+| Flow Type | Description |
+|-----------|-------------|
+| **SAML 2.0 — POST Binding** | Full SAML assertion and request analysis via HTML form POST |
+| **SAML 2.0 — Redirect Binding** | Query-string encoded `SAMLRequest` / `SAMLResponse` |
+| **SAML 2.0 — Artifact Binding** | `SAMLart` artifact resolution |
+| **SAML ECP** | Enhanced Client or Proxy profile for non-browser SAML |
+| **ADFS SAML** | Microsoft ADFS `/adfs/ls/` endpoint |
+| **Shibboleth SP** | Shibboleth `/Shibboleth.sso/` ACS and logout endpoints |
+| **WS-Federation** | WS-Fed `wresult` payload decoding — full `/wsfederation` and short `/wsfed` paths |
 
 ### FIDO2 / WebAuthn
 
@@ -228,6 +242,8 @@ Detects and decodes SAML traffic across a wide range of service providers and id
 3. **View captured requests** in the extension popup with detailed analysis
 4. **Inspect flows** using the detail panel with protocol-specific tabs (SAML, OAuth, FIDO2, Entra Claims)
 5. **Export** captured data in JSON, Markdown, TXT, or PDF format
+
+![HTML export report with session summary and per-request Entra analysis](<images/Entra Auth Tracer - Export Report.png>)
 
 ## Permissions
 
