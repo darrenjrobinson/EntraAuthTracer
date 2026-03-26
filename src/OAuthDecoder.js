@@ -113,7 +113,9 @@ class OAuthDecoder {
   }
 
   static isDeviceCodeEndpoint(path) {
-    return /\/oauth2?(\/v2\.0)?\/devicecode/.test(path) || path.endsWith('/devicecode');
+    return /\/oauth2?(\/v[0-9]+(?:\.[0-9]+)?)?\/devicecode/.test(path) ||
+      path.endsWith('/devicecode') ||
+      /\/connect\/deviceauthorization/i.test(path); // IdentityServer/Duende RFC 8628
   }
 
   // ─── Authorization endpoint analysis ──────────────────────────────────────
@@ -243,28 +245,35 @@ class OAuthDecoder {
     };
   }
 
-  static analyzeClientCredentials(data) {
+  static analyzeClientCredentials(data, headerAuth = null) {
     let authMethod, authMethodLabel;
-    if (data.client_assertion) {
+    // Header-based auth takes precedence (client_secret_basic / digest)
+    if (headerAuth) {
+      authMethod = headerAuth.scheme;
+      authMethodLabel = headerAuth.schemeLabel;
+    } else if (data.client_assertion) {
       const assertType = data.client_assertion_type || '';
       authMethod = 'client_assertion';
       authMethodLabel = assertType.includes('jwt-bearer')
         ? 'Certificate / Federated Credential (JWT Bearer)'
         : 'Client Assertion (JWT)';
     } else if (data.client_secret) {
-      authMethod = 'client_secret';
-      authMethodLabel = 'Client Secret (password credential)';
+      authMethod = 'client_secret_post';
+      authMethodLabel = 'Client Secret POST (password credential in body)';
     } else {
       authMethod = 'public';
-      authMethodLabel = 'No explicit credential (public client)';
+      authMethodLabel = 'No explicit credential (public client or mTLS)';
     }
+
+    // Prefer client_id from body; fall back to header-derived value (client_secret_basic)
+    const clientId = data.client_id || (headerAuth ? headerAuth.clientId : null);
 
     const scopes = data.scope ? data.scope.split(' ').filter(Boolean) : [];
     return {
       requestType: 'token_request',
       grantType: 'client_credentials',
       label: 'Client Credentials (M2M)',
-      clientId: data.client_id,
+      clientId,
       authMethod,
       authMethodLabel,
       scopes,
@@ -272,7 +281,7 @@ class OAuthDecoder {
       clientAssertion: data.client_assertion
         ? this.analyzeClientAssertion(data.client_assertion, data.client_assertion_type)
         : null,
-      warnings: this.generateClientCredentialsWarnings(data)
+      warnings: this.generateClientCredentialsWarnings(data, authMethod)
     };
   }
 
@@ -442,9 +451,24 @@ class OAuthDecoder {
     return warnings;
   }
 
-  static generateClientCredentialsWarnings(data) {
+  static generateClientCredentialsWarnings(data, authMethod) {
     const warnings = [];
-    if (data.client_secret) {
+    if (authMethod === 'client_secret_post') {
+      warnings.push({
+        severity: 'info',
+        message: 'Using client_secret in POST body (client_secret_post) — consider client_secret_basic or certificate-based authentication'
+      });
+    } else if (authMethod === 'client_secret_basic') {
+      warnings.push({
+        severity: 'info',
+        message: 'Using HTTP Basic authentication (client_secret_basic) — consider certificate-based or federated credential authentication for improved security'
+      });
+    } else if (authMethod === 'digest_auth') {
+      warnings.push({
+        severity: 'info',
+        message: 'Using HTTP Digest authentication with OAuth — non-standard; most modern IdPs use client_secret_basic or client_assertion'
+      });
+    } else if (data.client_secret) {
       warnings.push({
         severity: 'info',
         message: 'Using client_secret — consider certificate-based or federated credential authentication for improved security'
@@ -506,6 +530,129 @@ class OAuthDecoder {
         return 'refresh_token';
       default:
         return null;
+    }
+  }
+
+  // ─── Authorization header parsing ─────────────────────────────────────────
+
+  /**
+   * Parse an HTTP Authorization header value and return a structured descriptor.
+   * Handles Basic (RFC 7617), Digest (RFC 7616), and Bearer schemes.
+   * Returns null if the header is absent or unrecognised.
+   *
+   * @param {string|undefined} headerValue  Raw Authorization header value
+   * @returns {{ scheme, schemeLabel, clientId, clientSecret, digestParams } | null}
+   */
+  static parseAuthorizationHeader(headerValue) {
+    if (!headerValue) return null;
+
+    // Basic: base64(client_id:client_secret)
+    const basicMatch = headerValue.match(/^Basic\s+([A-Za-z0-9+/=]+)$/i);
+    if (basicMatch) {
+      try {
+        const decoded = atob(basicMatch[1]);
+        const colon = decoded.indexOf(':');
+        if (colon !== -1) {
+          return {
+            scheme: 'client_secret_basic',
+            schemeLabel: 'HTTP Basic (client_secret_basic — RFC 6749 §2.3.1)',
+            clientId: decoded.substring(0, colon),
+            clientSecret: decoded.substring(colon + 1)
+          };
+        }
+      } catch { /* malformed base64 */ }
+    }
+
+    // Digest: Authorization: Digest realm="...", username="...", ...
+    const digestMatch = headerValue.match(/^Digest\s+(.+)$/i);
+    if (digestMatch) {
+      const params = {};
+      const paramRe = /(\w+)=(?:"([^"]*)"|([^,\s]*))/g;
+      let m;
+      while ((m = paramRe.exec(digestMatch[1])) !== null) {
+        params[m[1]] = m[2] !== undefined ? m[2] : m[3];
+      }
+      return {
+        scheme: 'digest_auth',
+        schemeLabel: 'HTTP Digest Authentication (RFC 7616)',
+        clientId: params.username || null,
+        digestParams: {
+          realm: params.realm || null,
+          uri: params.uri || null,
+          algorithm: params.algorithm || 'MD5',
+          qop: params.qop || null
+        }
+      };
+    }
+
+    // Bearer — token already in hand (not a credential exchange)
+    if (/^Bearer\s+/i.test(headerValue)) {
+      return {
+        scheme: 'bearer',
+        schemeLabel: 'Bearer Token (already authenticated)',
+        clientId: null
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Enrich an existing oauthAnalysis with information extracted from request
+   * headers — called from SAMLTrace.handleBeforeSendHeaders once headers land.
+   *
+   * Patches authMethod/authMethodLabel/clientId in-place when the Authorization
+   * header reveals credentials that weren't visible in the POST body
+   * (e.g. client_secret_basic, HTTP Digest).
+   *
+   * @param {object|null} analysis   Existing oauthAnalysis (mutated in-place)
+   * @param {Array}       headers    Chrome webRequest requestHeaders array
+   */
+  static enrichWithHeaders(analysis, headers) {
+    if (!analysis || !headers || !headers.length) return;
+
+    // Find Authorization header (case-insensitive name)
+    const authHeader = headers.find(h => h.name.toLowerCase() === 'authorization');
+    if (!authHeader) return;
+
+    const parsed = this.parseAuthorizationHeader(authHeader.value);
+    if (!parsed) return;
+
+    // Don't overwrite a known client_assertion or client_secret_post with a bearer token
+    if (parsed.scheme === 'bearer') return;
+
+    // Only enrich token requests — not authorization endpoint GETs
+    if (analysis.requestType !== 'token_request' && analysis.requestType !== 'device_code_initiation') return;
+
+    analysis.authMethod = parsed.scheme;
+    analysis.authMethodLabel = parsed.schemeLabel;
+
+    // Prefer body-derived client_id; fill in from header if absent
+    if (!analysis.clientId && parsed.clientId) {
+      analysis.clientId = parsed.clientId;
+    }
+
+    if (parsed.scheme === 'digest_auth') {
+      analysis.digestAuth = parsed.digestParams;
+    }
+
+    // Replace or add the auth-method warning
+    if (analysis.warnings) {
+      // Remove any existing client_secret / auth-method warning
+      analysis.warnings = analysis.warnings.filter(
+        w => !w.message.includes('client_secret') && !w.message.includes('authentication')
+      );
+      if (parsed.scheme === 'client_secret_basic') {
+        analysis.warnings.push({
+          severity: 'info',
+          message: 'Using HTTP Basic authentication (client_secret_basic) — consider certificate-based or federated credential authentication'
+        });
+      } else if (parsed.scheme === 'digest_auth') {
+        analysis.warnings.push({
+          severity: 'info',
+          message: `HTTP Digest authentication detected (realm: ${parsed.digestParams.realm || 'unknown'}, algorithm: ${parsed.digestParams.algorithm}) — non-standard with OAuth; used by SAP Integration Suite, Dell Boomi, and some enterprise gateway products`
+        });
+      }
     }
   }
 }

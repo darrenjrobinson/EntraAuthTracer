@@ -41,8 +41,8 @@
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="view-toggle" role="group" aria-label="View mode">
-        <button id="viewListBtn" class="view-btn active" title="List view" aria-pressed="true">&#8801; List</button>
-        <button id="viewTimelineBtn" class="view-btn" title="Timeline view" aria-pressed="false">&#9200; Timeline</button>
+        <button id="viewListBtn" class="view-btn" title="List view" aria-pressed="false">&#8801; List</button>
+        <button id="viewTimelineBtn" class="view-btn active" title="Timeline view" aria-pressed="true">&#9200; Timeline</button>
       </div>
       <div class="search-bar">
           <label for="searchInput" class="sr-only">Search requests</label>
@@ -60,6 +60,7 @@
           <option value="oauth">OAuth</option>
           <option value="fido2">FIDO2</option>
           <option value="device_code">Device Code</option>
+          <option value="did">Verified ID / DID</option>
         </select>
         <select id="statusFilter" class="filter-select" aria-label="Filter by request status">
           <option value="">All Status</option>
@@ -144,6 +145,14 @@
               <h4>FIDO2 / Passkey Details</h4>
               <div id="fido2Details" class="fido2-details">
                 <!-- FIDO2 details will be populated here -->
+              </div>
+            </div>
+
+            <!-- Verified ID / DID Section (conditional) -->
+            <div id="didSection" class="section" style="display: none;">
+              <div id="didSectionHeader" class="section-header"><h4>Verified ID / DID Analysis</h4></div>
+              <div id="didDetails" class="did-details">
+                <!-- Verified ID / DID details will be populated here -->
               </div>
             </div>
 

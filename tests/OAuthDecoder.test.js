@@ -181,7 +181,7 @@ describe('OAuthDecoder.analyzeTokenRequest — client_credentials', () => {
     );
     const result = OAuthDecoder.analyzeTokenRequest(req.requestBody, new URLSearchParams());
     expect(result.grantType).toBe('client_credentials');
-    expect(result.authMethod).toBe('client_secret');
+    expect(result.authMethod).toBe('client_secret_post');
     expect(result.scopes).toContain('https://graph.microsoft.com/.default');
     expect(result.warnings.some(w => w.message.includes('client_secret'))).toBe(true);
   });
@@ -378,11 +378,182 @@ describe('OAuthDecoder.analyzeRequest integration', () => {
     );
     const result = OAuthDecoder.analyzeRequest(req);
     expect(result.grantType).toBe('client_credentials');
-    expect(result.authMethod).toBe('client_secret');
+    expect(result.authMethod).toBe('client_secret_post');
   });
 
   it('returns null for non-OAuth URLs', () => {
     const req = { url: 'https://login.microsoftonline.com/saml2', method: 'GET', requestBody: null };
     expect(OAuthDecoder.analyzeRequest(req)).toBeNull();
+  });
+});
+
+// ─── parseAuthorizationHeader ─────────────────────────────────────────────────
+
+describe('OAuthDecoder.parseAuthorizationHeader', () => {
+  it('decodes Basic auth header into client_secret_basic', () => {
+    const header = 'Basic ' + btoa('myclient:mysecret');
+    const result = OAuthDecoder.parseAuthorizationHeader(header);
+    expect(result).not.toBeNull();
+    expect(result.scheme).toBe('client_secret_basic');
+    expect(result.clientId).toBe('myclient');
+    expect(result.clientSecret).toBe('mysecret');
+    expect(result.schemeLabel).toContain('client_secret_basic');
+  });
+
+  it('handles client_id with colon in client_secret (only splits on first colon)', () => {
+    const header = 'Basic ' + btoa('clientid:secret:with:colons');
+    const result = OAuthDecoder.parseAuthorizationHeader(header);
+    expect(result.scheme).toBe('client_secret_basic');
+    expect(result.clientId).toBe('clientid');
+    expect(result.clientSecret).toBe('secret:with:colons');
+  });
+
+  it('decodes Digest auth header and extracts params', () => {
+    const header = 'Digest realm="sap.example.com", username="svcacct", uri="/oauth/token", algorithm=MD5, qop=auth';
+    const result = OAuthDecoder.parseAuthorizationHeader(header);
+    expect(result).not.toBeNull();
+    expect(result.scheme).toBe('digest_auth');
+    expect(result.clientId).toBe('svcacct');
+    expect(result.digestParams.realm).toBe('sap.example.com');
+    expect(result.digestParams.uri).toBe('/oauth/token');
+    expect(result.digestParams.algorithm).toBe('MD5');
+    expect(result.digestParams.qop).toBe('auth');
+    expect(result.schemeLabel).toContain('Digest');
+  });
+
+  it('Digest auth defaults algorithm to MD5 when absent', () => {
+    const header = 'Digest realm="example.com", username="user"';
+    const result = OAuthDecoder.parseAuthorizationHeader(header);
+    expect(result.scheme).toBe('digest_auth');
+    expect(result.digestParams.algorithm).toBe('MD5');
+  });
+
+  it('returns bearer scheme for Bearer header', () => {
+    const result = OAuthDecoder.parseAuthorizationHeader('Bearer eyJhbGciOiJSUzI1NiJ9.payload.sig');
+    expect(result).not.toBeNull();
+    expect(result.scheme).toBe('bearer');
+    expect(result.schemeLabel).toContain('Bearer');
+  });
+
+  it('returns null for null input', () => {
+    expect(OAuthDecoder.parseAuthorizationHeader(null)).toBeNull();
+  });
+
+  it('returns null for undefined input', () => {
+    expect(OAuthDecoder.parseAuthorizationHeader(undefined)).toBeNull();
+  });
+
+  it('returns null for unrecognised scheme (NTLM)', () => {
+    expect(OAuthDecoder.parseAuthorizationHeader('NTLM TlRMTVNTUAAB')).toBeNull();
+  });
+
+  it('is case-insensitive for Basic scheme', () => {
+    const header = 'basic ' + btoa('id:sec');
+    const result = OAuthDecoder.parseAuthorizationHeader(header);
+    expect(result).not.toBeNull();
+    expect(result.scheme).toBe('client_secret_basic');
+  });
+
+  it('is case-insensitive for Digest scheme', () => {
+    const header = 'digest realm="x.com", username="u"';
+    const result = OAuthDecoder.parseAuthorizationHeader(header);
+    expect(result).not.toBeNull();
+    expect(result.scheme).toBe('digest_auth');
+  });
+});
+
+// ─── enrichWithHeaders ────────────────────────────────────────────────────────
+
+describe('OAuthDecoder.enrichWithHeaders', () => {
+  function makeAnalysis(overrides = {}) {
+    return {
+      requestType: 'token_request',
+      grantType: 'client_credentials',
+      authMethod: 'public',
+      authMethodLabel: 'No explicit credential (public client or mTLS)',
+      clientId: null,
+      warnings: [],
+      ...overrides
+    };
+  }
+
+  function makeHeaders(name, value) {
+    return [{ name, value }];
+  }
+
+  it('patches authMethod and clientId from Basic auth header', () => {
+    const analysis = makeAnalysis();
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Basic ' + btoa('clientA:secretB')));
+    expect(analysis.authMethod).toBe('client_secret_basic');
+    expect(analysis.authMethodLabel).toContain('client_secret_basic');
+    expect(analysis.clientId).toBe('clientA');
+  });
+
+  it('adds an info warning when Basic auth is detected', () => {
+    const analysis = makeAnalysis();
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Basic ' + btoa('c:s')));
+    expect(analysis.warnings.some(w => w.severity === 'info' && w.message.includes('client_secret_basic'))).toBe(true);
+  });
+
+  it('patches authMethod and digestParams from Digest header', () => {
+    const analysis = makeAnalysis();
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Digest realm="sap.example.com", username="svcacct", uri="/oauth/token", algorithm=MD5'));
+    expect(analysis.authMethod).toBe('digest_auth');
+    expect(analysis.digestAuth).toBeDefined();
+    expect(analysis.digestAuth.realm).toBe('sap.example.com');
+    expect(analysis.clientId).toBe('svcacct');
+  });
+
+  it('Digest warning mentions SAP Integration Suite and Dell Boomi', () => {
+    const analysis = makeAnalysis();
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Digest realm="r", username="u"'));
+    const warn = analysis.warnings.find(w => w.message.includes('SAP'));
+    expect(warn).toBeDefined();
+    expect(warn.message).toContain('Dell Boomi');
+  });
+
+  it('does NOT overwrite an existing body-derived clientId', () => {
+    const analysis = makeAnalysis({ clientId: 'from-body' });
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Basic ' + btoa('from-header:secret')));
+    expect(analysis.clientId).toBe('from-body');
+  });
+
+  it('does not patch for Bearer token (scheme=bearer)', () => {
+    const analysis = makeAnalysis({ authMethod: 'public' });
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Bearer eyJhbGci...'));
+    expect(analysis.authMethod).toBe('public');
+  });
+
+  it('does not patch non-token requestTypes (authorization_request)', () => {
+    const analysis = { requestType: 'authorization_request', authMethod: 'public', warnings: [] };
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Basic ' + btoa('x:y')));
+    expect(analysis.authMethod).toBe('public');
+  });
+
+  it('also patches device_code_initiation requestType', () => {
+    const analysis = makeAnalysis({ requestType: 'device_code_initiation' });
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Basic ' + btoa('dcClient:dcSecret')));
+    expect(analysis.authMethod).toBe('client_secret_basic');
+    expect(analysis.clientId).toBe('dcClient');
+  });
+
+  it('handles case-insensitive header name lookup', () => {
+    const analysis = makeAnalysis();
+    OAuthDecoder.enrichWithHeaders(analysis, [{ name: 'AUTHORIZATION', value: 'Basic ' + btoa('id:sec') }]);
+    expect(analysis.authMethod).toBe('client_secret_basic');
+  });
+
+  it('returns without error on empty headers array', () => {
+    const analysis = makeAnalysis();
+    expect(() => OAuthDecoder.enrichWithHeaders(analysis, [])).not.toThrow();
+  });
+
+  it('returns without error on null analysis', () => {
+    expect(() => OAuthDecoder.enrichWithHeaders(null, makeHeaders('Authorization', 'Basic ' + btoa('x:y')))).not.toThrow();
+  });
+
+  it('returns without error on null headers', () => {
+    const analysis = makeAnalysis();
+    expect(() => OAuthDecoder.enrichWithHeaders(analysis, null)).not.toThrow();
   });
 });

@@ -158,6 +158,137 @@ describe('SAMLTrace', () => {
       const url = new URL('https://www.google.com/search?q=test');
       expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(false);
     });
+
+    // IdentityServer / Duende
+    it('should match IdentityServer /connect/token', () => {
+      const url = new URL('https://auth.example.com/connect/token');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match IdentityServer /connect/authorize', () => {
+      const url = new URL('https://auth.example.com/connect/authorize?client_id=x');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('should match IdentityServer /connect/userinfo', () => {
+      const url = new URL('https://auth.example.com/connect/userinfo');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('should match IdentityServer /connect/endsession', () => {
+      const url = new URL('https://auth.example.com/connect/endsession');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('should match IdentityServer /connect/introspect', () => {
+      const url = new URL('https://auth.example.com/connect/introspect');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    // OIDC discovery
+    it('should match OIDC discovery /.well-known/openid-configuration', () => {
+      const url = new URL('https://auth.example.com/.well-known/openid-configuration');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('should match JWKS endpoint /.well-known/jwks.json', () => {
+      const url = new URL('https://auth.example.com/.well-known/jwks.json');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('should match OAuth authorization server metadata /.well-known/oauth-authorization-server', () => {
+      const url = new URL('https://auth.example.com/.well-known/oauth-authorization-server');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    // Google / GCP known hostname shortcuts
+    it('should match accounts.google.com (hostname shortcut)', () => {
+      const url = new URL('https://accounts.google.com/o/oauth2/auth?client_id=x');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('should match oauth2.googleapis.com (GCP token endpoint)', () => {
+      const url = new URL('https://oauth2.googleapis.com/token');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match securetoken.googleapis.com (Firebase Auth)', () => {
+      const url = new URL('https://securetoken.googleapis.com/v1/token?key=AIza');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    // Okta wildcard domain
+    it('should match Okta tenant subdomain (wildcard .okta.com)', () => {
+      const url = new URL('https://myorg.okta.com/oauth2/v1/token');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match Okta preview tenant (wildcard .oktapreview.com)', () => {
+      const url = new URL('https://myorg.oktapreview.com/oauth2/v1/authorize?client_id=x');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('should match Okta Classic /api/v1/authn', () => {
+      const url = new URL('https://myorg.okta.com/api/v1/authn');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match Okta Identity Engine /idp/idx/', () => {
+      const url = new URL('https://myorg.okta.com/idp/idx/introspect');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    // AWS Cognito wildcard domain
+    it('should match AWS Cognito user pool domain (wildcard .amazoncognito.com)', () => {
+      const url = new URL('https://mypool.auth.us-east-1.amazoncognito.com/oauth2/token');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    // Shibboleth SP
+    it('should match Shibboleth SP ACS endpoint /Shibboleth.sso/SAML2/POST', () => {
+      const url = new URL('https://sp.university.edu/Shibboleth.sso/SAML2/POST');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match Shibboleth SP logout endpoint /Shibboleth.sso/Logout', () => {
+      const url = new URL('https://sp.university.edu/Shibboleth.sso/Logout');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    // ADFS on-prem
+    it('should match ADFS login service /adfs/ls/', () => {
+      const url = new URL('https://adfs.contoso.com/adfs/ls/?client-request-id=x');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    // SAML Artifact binding
+    it('should match SAML artifact binding SAMLart query param', () => {
+      const url = new URL('https://sp.example.com/acs?SAMLart=AA4AAMTq');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    // SAML Enhanced Client Profile
+    it('should match SAML ECP endpoint /ECP/', () => {
+      const url = new URL('https://idp.example.com/idp/profile/SAML2/SOAP/ECP/');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    // WS-Fed short path
+    it('should match WS-Fed short path /wsfed', () => {
+      const url = new URL('https://adfs.contoso.com/adfs/wsfed?wa=wsignin1.0');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    // FIDO2 explicit path
+    it('should match explicit /fido2/ path', () => {
+      const url = new URL('https://auth.example.com/fido2/assertion/options');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
+
+    it('should match explicit /fido/ path', () => {
+      const url = new URL('https://auth.example.com/fido/assertion');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href, 'POST'))).toBe(true);
+    });
   });
 
   describe('detectFlowType', () => {
@@ -223,6 +354,66 @@ describe('SAMLTrace', () => {
 
     it('should detect .well-known/webauthn as fido2_preflight over generic fido2_webauthn', () => {
       expect(detect('https://login.microsoftonline.com/.well-known/webauthn', 'GET')).toBe('fido2_preflight');
+    });
+
+    it('should detect OIDC discovery endpoint', () => {
+      expect(detect('https://auth.example.com/.well-known/openid-configuration')).toBe('oidc_discovery');
+    });
+
+    it('should detect JWKS endpoint as oidc_discovery', () => {
+      expect(detect('https://auth.example.com/.well-known/jwks.json')).toBe('oidc_discovery');
+    });
+
+    it('should detect Okta Classic /api/v1/authn', () => {
+      expect(detect('https://myorg.okta.com/api/v1/authn', 'POST')).toBe('okta_authn');
+    });
+
+    it('should detect Okta Identity Engine /idp/idx/', () => {
+      expect(detect('https://myorg.okta.com/idp/idx/introspect', 'POST')).toBe('okta_idx');
+    });
+
+    it('should detect OIDC userinfo endpoint', () => {
+      expect(detect('https://auth.example.com/connect/userinfo')).toBe('oidc_userinfo');
+    });
+
+    it('should detect token introspection endpoint', () => {
+      expect(detect('https://auth.example.com/connect/introspect', 'POST')).toBe('oidc_introspect');
+    });
+
+    it('should detect token revocation endpoint', () => {
+      expect(detect('https://auth.example.com/connect/revocation', 'POST')).toBe('oidc_revocation');
+    });
+
+    it('should detect RP-initiated logout /connect/endsession', () => {
+      expect(detect('https://auth.example.com/connect/endsession')).toBe('oidc_logout');
+    });
+
+    it('should detect SAML from SAMLart artifact binding query param', () => {
+      expect(detect('https://sp.example.com/acs?SAMLart=AA4AAMTq')).toBe('saml');
+    });
+
+    it('should detect Shibboleth SP ACS as saml', () => {
+      expect(detect('https://sp.university.edu/Shibboleth.sso/SAML2/POST', 'POST')).toBe('saml');
+    });
+
+    it('should detect Shibboleth SP Logout as saml', () => {
+      expect(detect('https://sp.university.edu/Shibboleth.sso/Logout')).toBe('saml');
+    });
+
+    it('should detect SAML ECP endpoint', () => {
+      expect(detect('https://idp.example.com/idp/profile/SAML2/SOAP/ECP/', 'POST')).toBe('saml_ecp');
+    });
+
+    it('should detect ADFS login service as adfs_saml', () => {
+      expect(detect('https://adfs.contoso.com/adfs/ls/?client-request-id=x')).toBe('adfs_saml');
+    });
+
+    it('should detect WS-Fed short /wsfed path', () => {
+      expect(detect('https://adfs.contoso.com/adfs/wsfed?wa=wsignin1.0')).toBe('wsfed');
+    });
+
+    it('should detect /fido2/assertion/options as fido2_assertion (assertion takes priority)', () => {
+      expect(detect('https://auth.example.com/fido2/assertion/options', 'POST')).toBe('fido2_assertion');
     });
   });
 

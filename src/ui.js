@@ -6,12 +6,13 @@
 import EntraClaimsDecoder from './EntraClaimsDecoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 import SamlDecoder from './SamlDecoder.js';
+import VerifiedIdDecoder from './VerifiedIdDecoder.js';
 
 class EntraAuthTracerUI {
   constructor() {
     this.currentRequests = [];
     this.selectedRequest = null;
-    this.viewMode = 'list'; // 'list' | 'timeline'
+    this.viewMode = 'timeline'; // 'list' | 'timeline'
     this.filters = {
       search: '',
       method: '',
@@ -318,6 +319,7 @@ class EntraAuthTracerUI {
     if (r.oauthAnalysis)  obj.oauth_analysis  = r.oauthAnalysis;
     if (r.fido2Analysis)  obj.fido2_analysis  = r.fido2Analysis;
     if (r.samlAnalysis)   obj.saml_analysis   = r.samlAnalysis;
+    if (r.didAnalysis)    obj.did_analysis     = r.didAnalysis;
     return obj;
   }
 
@@ -412,6 +414,29 @@ class EntraAuthTracerUI {
         }
       }
 
+      // Verified ID / DID analysis
+      if (r.didAnalysis && !r.didAnalysis.error) {
+        const d = r.didAnalysis;
+        lines.push('#### Verified ID / DID Analysis');
+        lines.push('');
+        lines.push('| Field | Value |');
+        lines.push('|---|---|');
+        lines.push(`| **Operation** | ${d.operation} |`);
+        if (d.did)                  lines.push(`| **DID** | \`${d.did}\` |`);
+        if (d.requestId)            lines.push(`| **Request ID** | \`${d.requestId}\` |`);
+        if (d.credentialType)       lines.push(`| **Credential Type** | ${d.credentialType} |`);
+        if (d.authority)            lines.push(`| **Authority** | ${d.authority} |`);
+        if (d.clientName)           lines.push(`| **Client Name** | ${d.clientName} |`);
+        if (d.requestedCredentials) lines.push(`| **Requested Credentials** | ${d.requestedCredentials.join(', ')} |`);
+        if (d.callbackUrl)          lines.push(`| **Callback URL** | ${d.callbackUrl} |`);
+        if (d.warnings && d.warnings.length) {
+          lines.push('');
+          lines.push('**Warnings:**');
+          for (const w of d.warnings) lines.push(`- [${w.severity.toUpperCase()}] ${w.message}`);
+        }
+        lines.push('');
+      }
+
       lines.push('---');
       lines.push('');
     });
@@ -500,6 +525,23 @@ class EntraAuthTracerUI {
         if (f.clientDataJSON) {
           lines.push(`  Type        : ${f.clientDataJSON.type}`);
           lines.push(`  Origin      : ${f.clientDataJSON.origin}`);
+        }
+      }
+
+      if (r.didAnalysis && !r.didAnalysis.error) {
+        const d = r.didAnalysis;
+        lines.push('');
+        lines.push('Verified ID / DID Analysis:');
+        lines.push(`  Operation   : ${d.operation}`);
+        if (d.did)                  lines.push(`  DID         : ${d.did}`);
+        if (d.requestId)            lines.push(`  Request ID  : ${d.requestId}`);
+        if (d.credentialType)       lines.push(`  Cred Type   : ${d.credentialType}`);
+        if (d.authority)            lines.push(`  Authority   : ${d.authority}`);
+        if (d.requestedCredentials) lines.push(`  Requested   : ${d.requestedCredentials.join(', ')}`);
+        if (d.callbackUrl)          lines.push(`  Callback    : ${d.callbackUrl}`);
+        if (d.warnings && d.warnings.length) {
+          lines.push('  Warnings:');
+          for (const w of d.warnings) lines.push(`    [${w.severity.toUpperCase()}] ${w.message}`);
         }
       }
 
@@ -697,6 +739,7 @@ class EntraAuthTracerUI {
     if (flowType === 'client_credentials' || flowType === 'refresh_token' ||
         flowType.includes('oauth') || flowType.includes('pkce') || flowType.includes('authcode')) return 'oauth';
     if (flowType === 'saml' || flowType === 'wsfed') return 'saml';
+    if (flowType.startsWith('did_') || flowType.startsWith('vc_')) return 'did';
     return 'other';
   }
 
@@ -747,6 +790,47 @@ class EntraAuthTracerUI {
         ? sorted[0].oauthAnalysis.clientId.substring(0, 8) + '…'
         : key.substring(0, 8) + '…';
       groups.push({ type: 'device_code', key, label: `Device Code — ${clientId}`, requests: sorted });
+    }
+
+    // 2. Verified ID / DID flows — group by hostname within a 30-second session window
+    const didReqs = requests.filter(r =>
+      !assignedIds.has(r.id) &&
+      (r.flowType && (r.flowType.startsWith('did_') || r.flowType.startsWith('vc_')))
+    );
+    const byDidHost = new Map();
+    for (const r of didReqs) {
+      let host = 'did';
+      try { host = new URL(r.url).hostname; } catch { /* keep */ }
+      if (!byDidHost.has(host)) byDidHost.set(host, []);
+      byDidHost.get(host).push(r);
+    }
+    for (const [host, reqs] of byDidHost) {
+      const sorted = reqs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      let sessionStart = null;
+      let session = [];
+      const flushDidSession = () => {
+        if (session.length === 0) return;
+        const firstOp = session[0].didAnalysis && session[0].didAnalysis.operation
+          ? session[0].didAnalysis.operation
+          : 'Verified ID Request';
+        const lbl = session.length === 1 ? firstOp : `Verified ID Flow — ${firstOp}`;
+        groups.push({ type: 'did', key: `did_${host}_${sessionStart}`, label: lbl, requests: session });
+        session = [];
+        sessionStart = null;
+      };
+      for (const r of sorted) {
+        if (sessionStart === null || (r.timestamp - sessionStart) <= 30000) {
+          session.push(r);
+          assignedIds.add(r.id);
+          if (sessionStart === null) sessionStart = r.timestamp;
+        } else {
+          flushDidSession();
+          session = [r];
+          sessionStart = r.timestamp;
+          assignedIds.add(r.id);
+        }
+      }
+      flushDidSession();
     }
 
     // 2. OAuth flows sharing the same clientId within a 60-second session window
@@ -811,8 +895,8 @@ class EntraAuthTracerUI {
       return `<div class="timeline-standalone">${this.renderRequestItem(group.requests[0])}</div>`;
     }
 
-    const flowBadgeClass = `flow-${group.type === 'device_code' ? 'device_code' : group.type === 'oauth' ? 'oauth' : group.type}`;
-    const flowLabel = group.type === 'device_code' ? 'DEVICE CODE' : group.type.toUpperCase();
+    const flowBadgeClass = `flow-${group.type === 'device_code' ? 'device_code' : group.type === 'oauth' ? 'oauth' : group.type === 'did' ? 'did' : group.type}`;
+    const flowLabel = group.type === 'device_code' ? 'DEVICE CODE' : group.type === 'did' ? 'VERIFIED ID' : group.type.toUpperCase();
     const startTime = group.requests[0] ? new Date(group.requests[0].timestamp || Date.now()).toLocaleTimeString() : '';
     const durationMs = group.requests.length > 1
       ? (group.requests[group.requests.length - 1].timestamp || 0) - (group.requests[0].timestamp || 0)
@@ -858,6 +942,7 @@ class EntraAuthTracerUI {
     if (r.flowType === 'device_code_initiation') return 'Initiation';
     if (r.flowType && r.flowType.startsWith('device_code') && r.status === 'completed') return 'Token issued';
     if (r.flowType && r.flowType.startsWith('device_code')) return `Poll #${idx}`;
+    if (r.didAnalysis && r.didAnalysis.operation) return r.didAnalysis.operation;
     if (r.oauthAnalysis && r.oauthAnalysis.label) return r.oauthAnalysis.label;
     return '';
   }
@@ -1215,6 +1300,9 @@ class EntraAuthTracerUI {
     // Show FIDO2 section if applicable
     this.populateFido2Section(request);
 
+    // Show Verified ID / DID section if applicable
+    this.populateDidSection(request);
+
     // Show OAuth section if applicable
     this.populateOAuthSection(request);
   }
@@ -1484,6 +1572,122 @@ class EntraAuthTracerUI {
     } else {
       fido2Section.style.display = 'none';
     }
+  }
+
+  /**
+   * Populate the Verified ID / DID section in the HTTP tab.
+   */
+  populateDidSection(request) {
+    const section = document.getElementById('didSection');
+    const details = document.getElementById('didDetails');
+    if (!section || !details) return;
+
+    const isDidFlow = request.flowType &&
+      (request.flowType.startsWith('did_') || request.flowType.startsWith('vc_'));
+
+    if (request.didAnalysis && !request.didAnalysis.error) {
+      section.style.display = 'block';
+      this.setSectionHeader('didSectionHeader', 'Verified ID / DID Analysis', '');
+      details.innerHTML = this.renderDidDetails(request.didAnalysis);
+    } else if (isDidFlow) {
+      section.style.display = 'block';
+      this.setSectionHeader('didSectionHeader', 'Verified ID / DID Analysis', '');
+      details.innerHTML = request.didAnalysis?.error
+        ? `<div class="error">Verified ID Error: ${this.escapeHtml(request.didAnalysis.error)}</div>`
+        : '<div>No Verified ID data available for this request</div>';
+    } else {
+      section.style.display = 'none';
+    }
+  }
+
+  /**
+   * Render Verified ID / DID analysis details.
+   */
+  renderDidDetails(analysis) {
+    const e = (v) => this.escapeHtml(v == null ? '' : String(v));
+    let html = '';
+
+    // Operation summary
+    html += `
+      <div class="oauth-section">
+        <div class="details-grid">
+          <div class="label">Operation:</div>
+          <div class="value"><strong>${e(analysis.operation)}</strong></div>
+          <div class="label">Host:</div>
+          <div class="value">${e(analysis.host)}</div>
+          ${analysis.did ? `<div class="label">DID:</div><div class="value mono" title="${e(analysis.did)}">${e(analysis.did.substring(0, 60))}${analysis.did.length > 60 ? '…' : ''}</div>` : ''}
+          ${analysis.requestId ? `<div class="label">Request ID:</div><div class="value mono">${e(analysis.requestId)}</div>` : ''}
+        </div>
+      </div>`;
+
+    // Issuance details
+    if (analysis.credentialType || analysis.manifestUrl || analysis.authority || analysis.pinRequired) {
+      html += `
+        <div class="oauth-section">
+          <h5>📄 Credential Details</h5>
+          <div class="details-grid">
+            ${analysis.credentialType ? `<div class="label">Credential Type:</div><div class="value">${e(analysis.credentialType)}</div>` : ''}
+            ${analysis.authority ? `<div class="label">Authority:</div><div class="value">${e(analysis.authority)}</div>` : ''}
+            ${analysis.manifestUrl ? `<div class="label">Manifest URL:</div><div class="value">${e(analysis.manifestUrl)}</div>` : ''}
+            ${analysis.pinRequired ? `<div class="label">PIN Required:</div><div class="value">Yes</div>` : ''}
+            ${analysis.format ? `<div class="label">Format:</div><div class="value">${e(analysis.format)}</div>` : ''}
+            ${analysis.proofPresent ? `<div class="label">Proof:</div><div class="value">Present</div>` : ''}
+          </div>
+        </div>`;
+    }
+
+    // Presentation / verification details
+    if (analysis.requestedCredentials && analysis.requestedCredentials.length) {
+      html += `
+        <div class="oauth-section">
+          <h5>🔍 Presentation Request</h5>
+          <div class="details-grid">
+            <div class="label">Requested Credentials:</div>
+            <div class="value">${analysis.requestedCredentials.map(t => e(t)).join('<br>')}</div>
+            ${analysis.clientName ? `<div class="label">Verifier Name:</div><div class="value">${e(analysis.clientName)}</div>` : ''}
+            ${analysis.includesReceipt !== undefined ? `<div class="label">Includes Receipt:</div><div class="value">${analysis.includesReceipt ? 'Yes' : 'No'}</div>` : ''}
+            ${analysis.includeQRCode !== undefined ? `<div class="label">Includes QR Code:</div><div class="value">${analysis.includeQRCode ? 'Yes' : 'No'}</div>` : ''}
+          </div>
+        </div>`;
+    }
+
+    // OpenID4VP
+    if (analysis.presentationDefinition) {
+      html += `
+        <div class="oauth-section">
+          <h5>🪪 OpenID4VP Presentation Definition</h5>
+          <div class="details-grid">
+            ${analysis.inputDescriptors && analysis.inputDescriptors.length ? `<div class="label">Input Descriptors:</div><div class="value">${analysis.inputDescriptors.map(d => e(d)).join(', ')}</div>` : ''}
+            ${analysis.vpTokenPresent ? `<div class="label">vp_token:</div><div class="value">Present</div>` : ''}
+            ${analysis.idTokenPresent ? `<div class="label">id_token:</div><div class="value">Present</div>` : ''}
+          </div>
+        </div>`;
+    }
+
+    // Callback
+    if (analysis.callbackUrl) {
+      html += `
+        <div class="oauth-section">
+          <h5>↩ Callback</h5>
+          <div class="details-grid">
+            <div class="label">Callback URL:</div>
+            <div class="value">${e(analysis.callbackUrl)}</div>
+            ${analysis.callbackState ? `<div class="label">State:</div><div class="value mono">${e(analysis.callbackState)}</div>` : ''}
+          </div>
+        </div>`;
+    }
+
+    // Warnings
+    if (analysis.warnings && analysis.warnings.length) {
+      const items = analysis.warnings.map(w => `
+        <div class="oauth-warning oauth-warning-${e(w.severity)}">
+          <span class="oauth-warning-icon">${w.severity === 'error' ? '🔴' : w.severity === 'warning' ? '🟡' : '🔵'}</span>
+          <span class="oauth-warning-text">${e(w.message)}</span>
+        </div>`).join('');
+      html += `<div class="oauth-section"><h5>🛡 Notes</h5>${items}</div>`;
+    }
+
+    return html;
   }
 
   /**

@@ -12,6 +12,7 @@
 
 import Fido2Decoder from './Fido2Decoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
+import VerifiedIdDecoder from './VerifiedIdDecoder.js';
 
 class SAMLTrace {
   constructor() {
@@ -148,25 +149,38 @@ class SAMLTrace {
    * Check if this is an authentication-related request
    */
   isAuthenticationRequest(url, details) {
-    // SAML/WS-Fed patterns (from upstream)
+    // SAML/WS-Fed patterns
     const samlPatterns = [
-      /\/saml2?/i,
-      /\/sso/i,
-      /\/ws-federation/i,
-      /samlrequest/i,
-      /samlresponse/i,
-      /wresult/i
+      /\/saml2?/i,              // /saml/, /saml2/ (any IdP)
+      /\/sso/i,                 // /sso — generic SSO endpoint
+      /\/ws-federation/i,       // WS-Federation full path
+      /\/wsfed(?:[/?#]|$)/i,   // WS-Federation short path used by some implementations
+      /samlrequest/i,           // SAML redirect binding query param
+      /samlresponse/i,          // SAML POST binding query param
+      /samlart/i,               // SAML Artifact binding query param
+      /wresult/i,               // WS-Fed result token
+      /Shibboleth\.sso/i,       // Shibboleth SP: /Shibboleth.sso/SAML2/POST, /Shibboleth.sso/Logout
+      /\/adfs\/ls/i,            // ADFS on-prem login service (form-based auth, SAML redirect target)
+      /\/ECP\//i,               // SAML Enhanced Client Profile (Shibboleth IdP — thick clients)
     ];
 
-    // OAuth/OIDC patterns
+    // OAuth/OIDC patterns — generic path-based detection
     const oauthPatterns = [
-      /\/oauth2?/i,
-      /\/token/i,
-      /\/authorize/i,
-      /\/devicecode/i
+      /\/oauth2?/i,              // /oauth/, /oauth2/ (covers most IdPs)
+      /\/token/i,               // token endpoint including /connect/token
+      /\/authorize/i,           // authorization endpoint
+      /\/devicecode/i,          // device code endpoint
+      /\/connect\//i,           // IdentityServer/Duende: /connect/token, /connect/authorize, /connect/userinfo, /connect/endsession, /connect/introspect, /connect/revocation
+      /\.well-known\/(openid-configuration|jwks|oauth-authorization-server)/i, // OIDC discovery & JWKS
+      /\/userinfo/i,            // OIDC userinfo endpoint
+      /\/introspect/i,          // RFC 7662 token introspection
+      /\/revoc/i,               // token revocation (/revoke or /revocation)
+      /\/endsession/i,          // RP-initiated logout (OpenID Connect)
+      /\/api\/v1\/authn/i,      // Okta Classic primary authentication
+      /\/idp\/idx\//i,          // Okta Identity Engine (OIE)
     ];
 
-    // FIDO2/Passkey patterns (NEW)
+    // FIDO2/Passkey patterns
     // Note: /passkeys?/ requires the word to be a complete path segment to avoid false
     // positives from repo/resource names that happen to start with "Passkey" (e.g. GitHub
     // repository names like /PasskeyProviderAAGUIDs/ would otherwise match).
@@ -174,21 +188,51 @@ class SAMLTrace {
       /\/assertion/i,
       /\/attestation/i,
       /\/passkeys?(?:[/?#]|$)/i,
-      /\/webauthn/i
+      /\/webauthn/i,
+      /\/fido2?(?:[/?#]|$)/i,  // explicit /fido2/ or /fido/ path (Azure AD B2C, enterprise FIDO2 servers)
     ];
 
-    // Entra-specific endpoints
-    const entraHosts = [
+    // DID / Verified ID patterns — decentralised identity flows
+    const didPatterns = [
+      /\/verifiableCredentials\//i,     // Entra Verified ID service API
+      /\/openid4vp\//i,                 // OpenID for Verifiable Presentations
+      /\/openid4vci\//i,                // OpenID for Verifiable Credential Issuance
+      /\/statuslist\//i,                // Credential status / revocation list
+      /\/identifiers\/did:/i,           // DID resolution requests
+    ];
+
+    // Known IdP hostnames — all requests to these are captured unconditionally
+    const knownIdpHosts = [
+      // Microsoft / Entra
       'login.microsoftonline.com',
       'sts.windows.net',
-      'login.live.com'
+      'login.live.com',
+      // Google / GCP
+      'accounts.google.com',
+      'oauth2.googleapis.com',
+      'securetoken.googleapis.com',  // Firebase Auth
+      'openidconnect.googleapis.com',
+      // Entra Verified ID / Decentralised Identity
+      'verifiedid.did.msidentity.com', // Entra Verified ID v1 service
+      'beta.did.msidentity.com',       // Entra Verified ID beta endpoint
+      'did.msidentity.com',            // Microsoft DID document host
+      'request.msidentity.com',        // Verified ID request service
+      'resolver.msidentity.com',       // Microsoft DID resolver
+      'resolver.identity.foundation',  // DIF universal resolver
     ];
 
-    // Check host patterns
-    if (entraHosts.includes(url.hostname)) return true;
+    // Known IdP domain suffixes — wildcard tenant subdomains
+    const knownIdpSuffixes = [
+      '.okta.com',          // Okta production tenants
+      '.oktapreview.com',   // Okta preview/sandbox tenants
+      '.amazoncognito.com', // AWS Cognito user pool domains
+    ];
+
+    if (knownIdpHosts.includes(url.hostname)) return true;
+    if (knownIdpSuffixes.some(suffix => url.hostname.endsWith(suffix))) return true;
 
     // Check URL patterns
-    const allPatterns = [...samlPatterns, ...oauthPatterns, ...fido2Patterns];
+    const allPatterns = [...samlPatterns, ...oauthPatterns, ...fido2Patterns, ...didPatterns];
     if (allPatterns.some(pattern => pattern.test(url.pathname) || pattern.test(url.search))) {
       return true;
     }
@@ -208,13 +252,36 @@ class SAMLTrace {
   detectFlowType(url, details) {
     const path = url.pathname.toLowerCase();
     const search = url.search.toLowerCase();
+    const hostname = url.hostname.toLowerCase();
+
+    // ─── DID / Verified ID detection (checked before OAuth — these hosts are unambiguous) ───
+    if (hostname === 'verifiedid.did.msidentity.com' || hostname === 'beta.did.msidentity.com') {
+      if (path.includes('/createissuancerequest'))     return 'did_issuance_request';
+      if (path.includes('/createpresentationrequest')) return 'did_presentation_request';
+      if (/\/requests?\//.test(path))                 return 'did_request_fetch';
+      if (path.includes('/callback'))                  return 'did_callback';
+      return 'did_vc_service';
+    }
+    if (hostname === 'did.msidentity.com' ||
+        hostname === 'resolver.msidentity.com' ||
+        hostname === 'resolver.identity.foundation') {
+      return 'did_resolution';
+    }
+    if (path.includes('/identifiers/did:'))  return 'did_resolution';
+    if (path.includes('/statuslist/'))       return 'did_status';
+    if (path.includes('/openid4vp/'))        return 'vc_presentation_openid4vp';
+    if (path.includes('/openid4vci/'))       return 'vc_issuance_openid4vci';
 
     // SAML detection — check query params and POST body FIRST (before generic OAuth path checks)
     // because Entra SAML flows go through login.microsoftonline.com/.../{tenant}/saml2
     // but also through /common/oauth2/... with a SAMLRequest param
-    if (search.includes('samlrequest') || search.includes('samlresponse')) return 'saml';
+    if (search.includes('samlrequest') || search.includes('samlresponse') || search.includes('samlart')) return 'saml';
     if (search.includes('wresult') || search.includes('wctx')) return 'wsfed';
-    if (path.includes('saml')) return 'saml';
+    // ECP must be checked before generic saml (path contains /SAML2/ AND /ECP/)
+    if (path.includes('/ecp/')) return 'saml_ecp';
+    if (path.includes('saml') || path.includes('shibboleth.sso')) return 'saml';
+    if (path.includes('/adfs/ls')) return 'adfs_saml';
+    if (path.includes('wsfed') && !path.includes('ws-federation')) return 'wsfed';
     if (details.requestBody && details.requestBody.formData) {
       const fd = details.requestBody.formData;
       if (fd.SAMLRequest || fd.SAMLResponse) return 'saml';
@@ -225,8 +292,22 @@ class SAMLTrace {
     if (path.includes('assertion')) return 'fido2_assertion';
     if (path.includes('attestation')) return 'fido2_attestation';
     if (path.includes('webauthn') && path.includes('well-known')) return 'fido2_preflight';
-    // Generic WebAuthn endpoint (e.g. GitHub /webauthn/challenge, /webauthn/assertion/options)
+    // Generic WebAuthn/FIDO2 endpoints
     if (path.includes('webauthn')) return 'fido2_webauthn';
+    if (/\/fido2?(?:[/?#]|$)/.test(path)) return 'fido2_webauthn';
+
+    // OIDC discovery endpoints
+    if (path.includes('.well-known')) return 'oidc_discovery';
+
+    // Okta-specific flows
+    if (path.includes('/api/v1/authn')) return 'okta_authn';
+    if (path.includes('/idp/idx/')) return 'okta_idx';
+
+    // OIDC auxiliary endpoints (userinfo, introspection, revocation, logout)
+    if (path.includes('/userinfo')) return 'oidc_userinfo';
+    if (path.includes('/introspect')) return 'oidc_introspect';
+    if (path.includes('/revok') || path.includes('/revoc')) return 'oidc_revocation';
+    if (path.includes('/endsession') || path.includes('/logout')) return 'oidc_logout';
 
     // Device code endpoint — always initiation (response is what contains device_code)
     if (OAuthDecoder.isDeviceCodeEndpoint(path)) return 'device_code_initiation';
@@ -292,6 +373,32 @@ class SAMLTrace {
       case 'oauth_token':
         this.handleOAuthRequest(requestData);
         break;
+      case 'did_issuance_request':
+      case 'did_presentation_request':
+      case 'did_request_fetch':
+      case 'did_callback':
+      case 'did_vc_service':
+      case 'did_resolution':
+      case 'did_status':
+      case 'vc_presentation_openid4vp':
+      case 'vc_issuance_openid4vci':
+        this.handleVerifiedIdRequest(requestData);
+        break;
+    }
+  }
+
+  /**
+   * Run VerifiedIdDecoder analysis and attach result to the request.
+   */
+  handleVerifiedIdRequest(requestData) {
+    try {
+      const analysis = VerifiedIdDecoder.analyzeRequest(requestData);
+      if (analysis) {
+        requestData.didAnalysis = analysis;
+      }
+    } catch (error) {
+      console.error('Verified ID analysis error:', error);
+      requestData.didAnalysis = { error: `Verified ID analysis failed: ${error.message}` };
     }
   }
 
@@ -449,6 +556,13 @@ class SAMLTrace {
     const request = this.findRequest(details);
     if (request) {
       request.requestHeaders = details.requestHeaders || [];
+
+      // Enrich OAuth analysis with Authorization header now that headers have arrived.
+      // analyzeRequest runs in handleBeforeRequest before headers are available, so
+      // client_secret_basic and HTTP Digest credentials are only visible here.
+      if (request.oauthAnalysis) {
+        OAuthDecoder.enrichWithHeaders(request.oauthAnalysis, request.requestHeaders);
+      }
     }
     return {};
   }
