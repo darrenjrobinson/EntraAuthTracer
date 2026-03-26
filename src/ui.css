@@ -78,6 +78,14 @@ html {
   min-height: 400px;
 }
 
+/* In the standalone popout window, fill the resizable window instead */
+html.popout-mode {
+  width: 100% !important;
+  min-width: 600px !important;
+  height: 100% !important;
+  min-height: 400px !important;
+}
+
 body {
   font-family: var(--font-family);
   font-size: var(--font-size-base);
@@ -155,6 +163,17 @@ body {
 
 .btn-secondary {
   background-color: var(--bg-tertiary);
+}
+
+.btn-icon {
+  padding: 5px 8px;
+  line-height: 0;
+  background-color: var(--bg-tertiary);
+}
+
+.btn-icon:hover {
+  background-color: var(--bg-tertiary);
+  border-color: var(--border-hover);
 }
 
 .btn-close {
@@ -1260,6 +1279,7 @@ body {
 }
 
 /* ─── Pane Splitter ────────────────────────────────────────────────────────── */
+/* Default: stacked (column) layout used in the normal extension popup */
 .pane-splitter {
   flex: 0 0 7px;
   background-color: var(--bg-tertiary);
@@ -1274,12 +1294,24 @@ body {
   width: 100%;
 }
 
+/* Side-by-side (row) layout used in the wider popout window */
+html.popout-mode .pane-splitter {
+  cursor: col-resize;
+  border-top: none;
+  border-bottom: none;
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  width: 7px;
+  height: 100%;
+}
+
 .pane-splitter:hover,
 .pane-splitter.dragging {
   background-color: var(--primary-blue);
   border-color: var(--primary-blue);
 }
 
+/* Horizontal grip dots — default (row layout) */
 .pane-splitter::before {
   content: '';
   display: block;
@@ -1290,9 +1322,20 @@ body {
   box-shadow: 0 -3px 0 var(--border-hover), 0 3px 0 var(--border-hover);
 }
 
+/* Vertical grip dots — popout (column layout) */
+html.popout-mode .pane-splitter::before {
+  width: 2px;
+  height: 36px;
+  box-shadow: -3px 0 0 var(--border-hover), 3px 0 0 var(--border-hover);
+}
+
 .pane-splitter.dragging::before {
   background-color: rgba(255,255,255,0.8);
   box-shadow: 0 -3px 0 rgba(255,255,255,0.8), 0 3px 0 rgba(255,255,255,0.8);
+}
+
+html.popout-mode .pane-splitter.dragging::before {
+  box-shadow: -3px 0 0 rgba(255,255,255,0.8), 3px 0 0 rgba(255,255,255,0.8);
 }
 
 /* ─── Popup Resize Handle ───────────────────────────────────────────────────── */

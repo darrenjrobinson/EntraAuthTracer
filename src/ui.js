@@ -32,6 +32,7 @@ class EntraAuthTracerUI {
     this.startPeriodicUpdate();
     this.initSplitter();
     this.initPopupResize();
+    this.initPopout();
 
     // Reset the toolbar icon badge whenever the popup is opened
     chrome.runtime.sendMessage({ action: 'resetBadge' });
@@ -127,6 +128,12 @@ class EntraAuthTracerUI {
       this.filters.status = e.target.value;
       this.filterAndRender();
     });
+
+    // Popout button
+    const popoutBtn = document.getElementById('popoutBtn');
+    if (popoutBtn) {
+      popoutBtn.addEventListener('click', () => this.popout());
+    }
 
     // Control buttons
     document.getElementById('clearBtn').addEventListener('click', () => {
@@ -1170,9 +1177,39 @@ class EntraAuthTracerUI {
     const panel = document.getElementById('detailPanel');
     panel.style.display = 'flex';
 
-    // Show the pane splitter
+    // Show the pane splitter and ensure the list container dimensions are
+    // correct for the current layout direction (column = height, row = width).
     const splitter = document.getElementById('paneSplitter');
     if (splitter) splitter.style.display = 'flex';
+
+    const mainContent = document.querySelector('.main-content');
+    const listContainer = document.querySelector('.request-list-container');
+    if (mainContent && listContainer) {
+      const isHorizontal = getComputedStyle(mainContent).flexDirection === 'row';
+      if (isHorizontal) {
+        // Clear any stacked-layout height so the side-by-side flex sizing takes over
+        listContainer.style.height = '';
+        const savedW = localStorage.getItem('entraTracerSplitW');
+        if (savedW) {
+          listContainer.style.flex = '0 0 auto';
+          listContainer.style.width = parseFloat(savedW) + 'px';
+        } else {
+          listContainer.style.flex = '';
+          listContainer.style.width = '';
+        }
+      } else {
+        // Clear any side-by-side width so the full-width stacked layout takes over
+        listContainer.style.width = '';
+        const savedH = localStorage.getItem('entraTracerSplitH');
+        if (savedH) {
+          listContainer.style.flex = '0 0 auto';
+          listContainer.style.height = parseFloat(savedH) + 'px';
+        } else {
+          listContainer.style.flex = '';
+          listContainer.style.height = '';
+        }
+      }
+    }
 
     // Update title
     const url = new URL(request.url);
@@ -2418,20 +2455,37 @@ class EntraAuthTracerUI {
     const mainContent = document.querySelector('.main-content');
     if (!splitter || !listContainer || !mainContent) return;
 
-    // Restore saved split height (stored in pixels)
-    const saved = localStorage.getItem('entraTracerSplitH');
-    if (saved) {
-      listContainer.style.flex = '0 0 auto';
-      listContainer.style.height = parseFloat(saved) + 'px';
+    // Restore saved split position for the CURRENT layout direction only.
+    // If we restore the wrong axis (e.g. a pixel-width from a popout session into
+    // the stacked popup layout) the list container ends up the wrong size.
+    const isHorizontalNow = () => getComputedStyle(mainContent).flexDirection === 'row';
+    if (isHorizontalNow()) {
+      const savedW = localStorage.getItem('entraTracerSplitW');
+      if (savedW) {
+        listContainer.style.flex = '0 0 auto';
+        listContainer.style.width = parseFloat(savedW) + 'px';
+        listContainer.style.height = '';
+      }
+    } else {
+      const savedH = localStorage.getItem('entraTracerSplitH');
+      if (savedH) {
+        listContainer.style.flex = '0 0 auto';
+        listContainer.style.height = parseFloat(savedH) + 'px';
+        listContainer.style.width = '';
+      }
     }
 
     let dragging = false;
-    let startY = 0;
-    let startH = 0;
+    let isHorizontal = false; // true = side-by-side (col-resize), false = stacked (row-resize)
+    let startX = 0, startY = 0, startW = 0, startH = 0;
 
     splitter.addEventListener('mousedown', (e) => {
+      // Detect current layout direction at drag-start so mid-resize changes are handled correctly
+      isHorizontal = isHorizontalNow();
       dragging = true;
+      startX = e.clientX;
       startY = e.clientY;
+      startW = listContainer.getBoundingClientRect().width;
       startH = listContainer.getBoundingClientRect().height;
       splitter.classList.add('dragging');
       document.body.classList.add('no-select');
@@ -2440,11 +2494,21 @@ class EntraAuthTracerUI {
 
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      const mainH = mainContent.getBoundingClientRect().height;
-      const newH = Math.max(60, Math.min(mainH - 80, startH + (e.clientY - startY)));
-      listContainer.style.flex = '0 0 auto';
-      listContainer.style.height = newH + 'px';
-      localStorage.setItem('entraTracerSplitH', newH);
+      if (isHorizontal) {
+        const mainW = mainContent.getBoundingClientRect().width;
+        const newW = Math.max(200, Math.min(mainW - 200, startW + (e.clientX - startX)));
+        listContainer.style.flex = '0 0 auto';
+        listContainer.style.width = newW + 'px';
+        listContainer.style.height = '';
+        localStorage.setItem('entraTracerSplitW', newW);
+      } else {
+        const mainH = mainContent.getBoundingClientRect().height;
+        const newH = Math.max(60, Math.min(mainH - 80, startH + (e.clientY - startY)));
+        listContainer.style.flex = '0 0 auto';
+        listContainer.style.height = newH + 'px';
+        listContainer.style.width = '';
+        localStorage.setItem('entraTracerSplitH', newH);
+      }
     });
 
     document.addEventListener('mouseup', () => {
@@ -2456,12 +2520,46 @@ class EntraAuthTracerUI {
   }
 
   /**
+   * Open the extension UI in a dedicated, freely-resizable popup window.
+   * The button is hidden when we are already running in that standalone window.
+   */
+  initPopout() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('popout') === 'true') {
+      // Add class so CSS overrides the fixed popup dimensions to fill the window
+      document.documentElement.classList.add('popout-mode');
+      // Hide the popout button so it cannot be re-opened
+      const btn = document.getElementById('popoutBtn');
+      if (btn) btn.style.display = 'none';
+      // Hide the drag-resize handle — not needed in a standalone resizable window
+      const resizeHandle = document.getElementById('resizeHandle');
+      if (resizeHandle) resizeHandle.style.display = 'none';
+    }
+  }
+
+  popout() {
+    const url = chrome.runtime.getURL('src/ui.html') + '?popout=true';
+    const w = Math.min(window.screen.availWidth, 1280);
+    const h = Math.min(window.screen.availHeight, 900);
+    chrome.windows.create({
+      url,
+      type: 'popup',
+      width: w,
+      height: h
+    });
+  }
+
+  /**
    * Popup resize handle — drag the bottom-right corner to resize both width and height.
    * Maximum dimensions are capped at the available screen area.
    */
   initPopupResize() {
     const handle = document.getElementById('resizeHandle');
     if (!handle) return;
+
+    // In popout mode the window is freely resizable by the OS — skip the fixed-dimension logic
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('popout') === 'true') return;
 
     const html = document.documentElement;
 
