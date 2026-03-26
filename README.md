@@ -262,6 +262,8 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 - **Sensitive Data Handling**: Client secrets and refresh tokens are automatically redacted
 - **Temporary Storage**: Captured request data is cleared when the extension is closed
 
+Full details: [Privacy Policy](PRIVACY.md)
+
 ## Contributing
 
 This is a fork of [SimpleSAMLphp SAML-tracer](https://github.com/SimpleSAMLphp/SAML-tracer) licensed under BSD-2-Clause. Contributions are welcome!
@@ -290,5 +292,5 @@ Licensed under the BSD-2-Clause License, maintaining compatibility with the upst
 
 ---
 
-**Version**: 1.0.0 | **Browser Support**: Chrome 88+, Edge 88+
+**Version**: 1.0.0 | **Browser Support**: Chrome 88+, Edge 88+ | [Privacy Policy](PRIVACY.md)
 
