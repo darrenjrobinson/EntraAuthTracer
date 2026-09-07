@@ -1,7 +1,7 @@
 const { Jimp, intToRGBA, rgbaToInt } = require('jimp');
 const path = require('path');
 
-const SOURCE = path.join(__dirname, '../icons/EntraAuthTracer.png');
+const SOURCE = path.join(__dirname, '../assets/EntraAuthTracer.png');
 const SIZES = [16, 32, 48, 128];
 const TRANSPARENT = rgbaToInt(0, 0, 0, 0);
 
