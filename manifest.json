@@ -26,22 +26,16 @@
     "service_worker": "src/background.js"
   },
 
+  "minimum_chrome_version": "103",
+
   "permissions": [
     "webRequest",
     "tabs",
-    "storage",
-    "windows"
+    "storage"
   ],
 
   "host_permissions": [
     "<all_urls>"
-  ],
-
-  "web_accessible_resources": [
-    {
-      "resources": ["src/*.js", "src/*.css", "icons/*"],
-      "matches": ["<all_urls>"]
-    }
   ],
 
   "content_security_policy": {
