@@ -3,13 +3,14 @@
  */
 
 import SamlDecoder from '../src/SamlDecoder.js';
+import { utf8ToB64 } from './helpers.js';
 const zlib = require('zlib');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Base64-encode a string (POST binding: no deflate) */
+/** Base64-encode a UTF-8 string (POST binding: no deflate) */
 function b64Encode(str) {
-  return btoa(unescape(encodeURIComponent(str)));
+  return utf8ToB64(str);
 }
 
 /**

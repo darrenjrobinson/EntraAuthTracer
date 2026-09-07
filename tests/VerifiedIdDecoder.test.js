@@ -4,26 +4,19 @@
 
 import VerifiedIdDecoder from '../src/VerifiedIdDecoder.js';
 import samltrace from '../src/SAMLTrace.js';
+import { makeDetails, makeState } from './helpers.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Local shorthand: a bare captured request with a preset flowType. */
 function makeRequest(url, flowType, requestBody = null) {
   return { url, flowType, requestBody };
 }
 
-function makeDetails(url, method = 'GET', extras = {}) {
-  return {
-    url,
-    method,
-    tabId: 1,
-    type: 'xmlhttprequest',
-    timeStamp: Date.now(),
-    requestHeaders: [],
-    responseHeaders: [],
-    requestBody: null,
-    ...extras,
-  };
-}
+// The SAMLTrace singleton is shared across suites — give every test a fresh state.
+let savedState;
+beforeEach(() => { savedState = samltrace.state; samltrace.state = makeState(); });
+afterEach(() => { samltrace.state = savedState; });
 
 // ─── VerifiedIdDecoder.flattenBody ────────────────────────────────────────────
 

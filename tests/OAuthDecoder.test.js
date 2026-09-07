@@ -543,17 +543,28 @@ describe('OAuthDecoder.enrichWithHeaders', () => {
     expect(analysis.authMethod).toBe('client_secret_basic');
   });
 
-  it('returns without error on empty headers array', () => {
+  it('leaves the analysis untouched when the headers array is empty', () => {
     const analysis = makeAnalysis();
-    expect(() => OAuthDecoder.enrichWithHeaders(analysis, [])).not.toThrow();
+    const before = JSON.parse(JSON.stringify(analysis));
+    OAuthDecoder.enrichWithHeaders(analysis, []);
+    expect(analysis).toEqual(before);
   });
 
-  it('returns without error on null analysis', () => {
-    expect(() => OAuthDecoder.enrichWithHeaders(null, makeHeaders('Authorization', 'Basic ' + btoa('x:y')))).not.toThrow();
+  it('is a no-op for a null analysis', () => {
+    expect(OAuthDecoder.enrichWithHeaders(null, makeHeaders('Authorization', 'Basic ' + btoa('x:y')))).toBeUndefined();
   });
 
-  it('returns without error on null headers', () => {
+  it('leaves the analysis untouched when headers are null', () => {
     const analysis = makeAnalysis();
-    expect(() => OAuthDecoder.enrichWithHeaders(analysis, null)).not.toThrow();
+    const before = JSON.parse(JSON.stringify(analysis));
+    OAuthDecoder.enrichWithHeaders(analysis, null);
+    expect(analysis).toEqual(before);
+  });
+
+  it('leaves the analysis untouched when there is no Authorization header', () => {
+    const analysis = makeAnalysis();
+    const before = JSON.parse(JSON.stringify(analysis));
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Content-Type', 'application/x-www-form-urlencoded'));
+    expect(analysis).toEqual(before);
   });
 });

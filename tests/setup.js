@@ -17,13 +17,18 @@ global.chrome = {
     sendMessage: jest.fn((message, callback) => {
       // Simulate async response
       setTimeout(() => {
-        callback({ success: true, requests: [] });
+        if (typeof callback === 'function') callback({ success: true, requests: [] });
       }, 10);
-    })
+    }),
+    getManifest: jest.fn(() => ({ version: '1.1.0-test', name: 'Entra Auth Tracer' })),
+    getURL: jest.fn((p) => 'chrome-extension://test-extension-id/' + p)
   },
   action: {
     setBadgeText: jest.fn(),
     setBadgeBackgroundColor: jest.fn()
+  },
+  windows: {
+    create: jest.fn()
   },
   webRequest: {
     onBeforeRequest: {
@@ -49,13 +54,24 @@ global.chrome = {
   }
 };
 
-// Mock TextDecoder for Node.js environment
-if (typeof TextDecoder === 'undefined') {
-  global.TextDecoder = class TextDecoder {
-    decode(buffer) {
-      return Buffer.from(buffer).toString('utf-8');
-    }
-  };
+// jsdom does not expose TextEncoder/TextDecoder — use Node's implementations
+if (typeof TextDecoder === 'undefined' || typeof TextEncoder === 'undefined') {
+  const util = require('util');
+  if (typeof TextEncoder === 'undefined') global.TextEncoder = util.TextEncoder;
+  if (typeof TextDecoder === 'undefined') global.TextDecoder = util.TextDecoder;
+}
+
+// jsdom lacks CSS.escape (used by the UI to build attribute selectors)
+if (typeof CSS === 'undefined' || typeof CSS.escape !== 'function') {
+  global.CSS = Object.assign(global.CSS || {}, {
+    escape: (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\' + c)
+  });
+}
+
+// jsdom lacks Blob URL helpers (used by the UI download path)
+if (typeof URL.createObjectURL !== 'function') {
+  URL.createObjectURL = jest.fn(() => 'blob:mock-url');
+  URL.revokeObjectURL = jest.fn();
 }
 
 // Mock atob/btoa for base64 operations

@@ -6,47 +6,26 @@
  * prevent real network listeners from being registered.
  */
 
-// We need access to the SAMLTrace CLASS for testing, not the singleton.
-// Since the module exports only the singleton we drive it through the class
-// by creating a fresh instance using the module under test's internal class.
-// The simplest approach: import the default singleton after mocking Chrome.
+// The module exports a singleton; the Chrome API stubs in setup.js make its
+// module-level listener registration harmless. Every test gets a fresh state
+// object (see beforeEach below) so suites cannot leak state into each other.
 
 import samltrace from '../src/SAMLTrace.js';
 import Fido2Decoder from '../src/Fido2Decoder.js';
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Build a minimal extensionState object for test isolation */
-function makeState(overrides = {}) {
-  return {
-    requests: [],
-    deviceCodeCorrelation: new Map(),
-    fido2Sessions: [],
-    isActive: true,
-    badgeCount: 0,
-    onNewAuthRequest: jest.fn(),
-    ...overrides
-  };
-}
-
-/** Build a minimal webRequest details object */
-function makeDetails(url, method = 'GET', extras = {}) {
-  return {
-    url,
-    method,
-    tabId: 1,
-    type: 'xmlhttprequest',
-    timeStamp: Date.now(),
-    requestHeaders: [],
-    responseHeaders: [],
-    requestBody: null,
-    ...extras
-  };
-}
+import { makeState, makeDetails } from './helpers.js';
 
 // ─── Test suites ─────────────────────────────────────────────────────────────
 
 describe('SAMLTrace', () => {
+  let savedState;
+  beforeEach(() => {
+    savedState = samltrace.state;
+    samltrace.state = makeState();
+  });
+  afterEach(() => {
+    samltrace.state = savedState;
+  });
+
   describe('generateRequestId', () => {
     it('should generate unique IDs', () => {
       const id1 = samltrace.generateRequestId();
@@ -526,16 +505,16 @@ describe('SAMLTrace', () => {
       expect(state.requests).toHaveLength(0);
     });
 
-    it('should not throw externally when state is null (error is caught internally)', () => {
+    it('should swallow internal errors, log them, and still return {} when state is null', () => {
       samltrace.state = null;
-      // handleBeforeRequest catches errors internally and logs them; it must not throw
-      let threw = false;
-      try {
-        samltrace.handleBeforeRequest(makeDetails('https://login.microsoftonline.com/token'));
-      } catch {
-        threw = true;
-      }
-      expect(threw).toBe(false);
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const result = samltrace.handleBeforeRequest(makeDetails('https://login.microsoftonline.com/token'));
+      expect(result).toEqual({});
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error in handleBeforeRequest'),
+        expect.any(Error)
+      );
+      errSpy.mockRestore();
     });
   });
 
@@ -640,13 +619,14 @@ describe('SAMLTrace', () => {
       expect(requestData).toHaveProperty('oauthAnalysis');
     });
 
-    it('should attach error oauthAnalysis when OAuthDecoder throws', () => {
+    it('should attach an error oauthAnalysis when the request cannot be analysed', () => {
       samltrace.state = makeState();
-      // Provide broken data that cannot be analysed and force a thrown error
+      // A null URL makes OAuthDecoder.analyzeRequest fail — the failure must be
+      // captured on the request rather than propagated to the webRequest listener.
       const requestData = { flowType: 'oauth_token', requestBody: null, url: null, method: null };
-      // This should not throw — the internal try/catch handles it
-      expect(() => samltrace.handleOAuthRequest(requestData)).not.toThrow();
-      expect(requestData).toHaveProperty('oauthAnalysis');
+      samltrace.handleOAuthRequest(requestData);
+      expect(requestData.oauthAnalysis).toBeDefined();
+      expect(requestData.oauthAnalysis.error).toMatch(/OAuth analysis failed/);
     });
   });
 
@@ -657,16 +637,22 @@ describe('SAMLTrace', () => {
 
     it('should return early (no-op) when requestBody is null', () => {
       samltrace.state = makeState();
+      const decodeSpy = jest.spyOn(Fido2Decoder, 'decodeFido2Request');
       const requestData = { flowType: 'fido2_assertion', requestBody: null };
-      expect(() => samltrace.handleFido2Request(requestData)).not.toThrow();
+      samltrace.handleFido2Request(requestData);
+      expect(decodeSpy).not.toHaveBeenCalled();
       expect(requestData.fido2Analysis).toBeUndefined();
+      expect(samltrace.state.fido2Sessions).toHaveLength(0);
     });
 
     it('should return early when requestBody type is not json', () => {
       samltrace.state = makeState();
+      const decodeSpy = jest.spyOn(Fido2Decoder, 'decodeFido2Request');
       const requestData = { flowType: 'fido2_assertion', requestBody: { type: 'formData', data: {} } };
-      expect(() => samltrace.handleFido2Request(requestData)).not.toThrow();
+      samltrace.handleFido2Request(requestData);
+      expect(decodeSpy).not.toHaveBeenCalled();
       expect(requestData.fido2Analysis).toBeUndefined();
+      expect(samltrace.state.fido2Sessions).toHaveLength(0);
     });
 
     it('should attach fido2Analysis and push to fido2Sessions on successful decode', () => {
@@ -859,9 +845,15 @@ describe('SAMLTrace', () => {
       expect(state.requests[0].statusCode).toBe(200);
     });
 
-    it('should not throw when no matching request', () => {
-      samltrace.state = makeState();
-      expect(() => samltrace.handleCompleted({ url: 'https://other.com/', method: 'GET', timeStamp: Date.now(), statusCode: 404 })).not.toThrow();
+    it('should leave stored requests untouched when nothing matches', () => {
+      const now = Date.now();
+      const state = makeState({
+        requests: [{ id: 'r1', url: 'https://login.microsoftonline.com/token', method: 'POST', timestamp: now, status: 'pending' }]
+      });
+      samltrace.state = state;
+      const before = JSON.parse(JSON.stringify(state.requests));
+      samltrace.handleCompleted({ url: 'https://other.com/', method: 'GET', timeStamp: now, statusCode: 404 });
+      expect(state.requests).toEqual(before);
     });
   });
 
@@ -884,9 +876,15 @@ describe('SAMLTrace', () => {
       expect(state.requests[0].error).toBe('net::ERR_ABORTED');
     });
 
-    it('should not throw when no matching request', () => {
-      samltrace.state = makeState();
-      expect(() => samltrace.handleError({ url: 'https://other.com/', method: 'GET', timeStamp: Date.now(), error: 'net::ERR_FAILED' })).not.toThrow();
+    it('should leave stored requests untouched when nothing matches', () => {
+      const now = Date.now();
+      const state = makeState({
+        requests: [{ id: 'r1', url: 'https://login.microsoftonline.com/token', method: 'POST', timestamp: now, status: 'pending' }]
+      });
+      samltrace.state = state;
+      const before = JSON.parse(JSON.stringify(state.requests));
+      samltrace.handleError({ url: 'https://other.com/', method: 'GET', timeStamp: now, error: 'net::ERR_FAILED' });
+      expect(state.requests).toEqual(before);
     });
   });
 });

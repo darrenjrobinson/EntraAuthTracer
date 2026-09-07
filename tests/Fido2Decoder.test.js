@@ -134,6 +134,7 @@ describe('Fido2Decoder', () => {
       const result = Fido2Decoder.decodeFido2Request(requestBody);
       expect(result).toBe(null);
     });
+  });
 
   describe('decodeCBORPublicKey', () => {
     // Note: This test uses mock CBOR data since we can't easily create real CBOR in tests
@@ -255,7 +256,6 @@ describe('Fido2Decoder', () => {
       expect(Fido2Decoder.getCurveDescription(999)).toBe('Unknown (999)');
     });
   });
-  }); // closes the improperly-nested decodeFido2Request describe
 
   // ─── Additional coverage tests ───────────────────────────────────────────
 
