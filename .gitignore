@@ -65,3 +65,5 @@ web-ext-artifacts/
 
 # Chrome extension private key
 *.pem
+# graphify knowledge-graph output (local tool)
+graphify-out/

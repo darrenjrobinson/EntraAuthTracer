@@ -6,7 +6,6 @@
 import EntraClaimsDecoder from './EntraClaimsDecoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 import SamlDecoder from './SamlDecoder.js';
-import VerifiedIdDecoder from './VerifiedIdDecoder.js';
 
 class EntraAuthTracerUI {
   constructor() {
