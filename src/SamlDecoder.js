@@ -315,6 +315,32 @@ class SamlDecoder {
       return m ? m[0] : null;
     };
     const hasElement = (src, local) => new RegExp(`<${NAME}${local}\\b`).test(src || '');
+    // Namespace bound to an element's prefix (or the default namespace when it has
+    // none): a declaration on the tag itself wins, otherwise the nearest preceding
+    // declaration in the document. Approximate scoping, but it keeps the fallback
+    // parser from counting <Signature> elements outside XMLDSig (parse() is exact).
+    const namespaceOf = (prefix, tagAttrs, tagText) => {
+      const decl = prefix ? `xmlns:${prefix}` : 'xmlns';
+      const own = new RegExp(`(?:^|\\s)${decl}\\s*=\\s*"([^"]*)"`).exec(tagAttrs || '');
+      if (own) return own[1];
+      const pos = text.indexOf(tagText);
+      const before = pos >= 0 ? text.slice(0, pos) : text;
+      const re = new RegExp(`\\s${decl}\\s*=\\s*"([^"]*)"`, 'g');
+      let ns = null;
+      let m;
+      while ((m = re.exec(before)) !== null) ns = m[1];
+      return ns;
+    };
+    // True only when `src` contains a <Signature> in the XML Signature namespace —
+    // the same rule hasDirectChild(el, 'Signature', XMLDSIG_NS) applies in parse().
+    const hasXmldsigSignature = (src) => {
+      const re = /<(?:([\w.-]+):)?Signature\b([^>]*)>/g;
+      let m;
+      while ((m = re.exec(src || '')) !== null) {
+        if (namespaceOf(m[1] || null, m[2], m[0]) === SamlDecoder.XMLDSIG_NS) return true;
+      }
+      return false;
+    };
 
     const assertionXml = messageType === 'Response' ? section(text, 'Assertion') : null;
     const outsideAssertion = assertionXml ? text.replace(assertionXml, '') : text;
@@ -326,7 +352,7 @@ class SamlDecoder {
       return {
         code: fullCode.split(':').pop(),
         fullCode,
-        isSuccess: fullCode.includes('Success'),
+        isSuccess: fullCode === SamlDecoder.STATUS_SUCCESS,
         message: firstText(src, 'StatusMessage')
       };
     };
@@ -339,7 +365,7 @@ class SamlDecoder {
       issueInstant: attr(rootAttrs, 'IssueInstant'),
       destination: attr(rootAttrs, 'Destination'),
       issuer: firstText(outsideAssertion, 'Issuer'),
-      messageSigned: hasElement(outsideAssertion, 'Signature'),
+      messageSigned: hasXmldsigSignature(outsideAssertion),
       hasEncryptedAssertion: hasElement(text, 'EncryptedAssertion')
     };
 
@@ -378,7 +404,7 @@ class SamlDecoder {
           assertion = {
             id: attr(aAttrs, 'ID'),
             issueInstant: attr(aAttrs, 'IssueInstant'),
-            signed: hasElement(assertionXml, 'Signature'),
+            signed: hasXmldsigSignature(assertionXml),
             issuer: firstText(assertionXml, 'Issuer'),
             nameID: nameIdAttrs !== null ? {
               value: firstText(assertionXml, 'NameID'),

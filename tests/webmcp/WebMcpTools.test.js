@@ -310,12 +310,30 @@ describe('WebMcpTools', () => {
       expect(JSON.stringify(ropc)).not.toContain('Hunter2!');
     });
 
-    it('truncates raw bodies', async () => {
+    it('parses raw form or JSON bodies and redacts them field by field', async () => {
+      const form = makeRequest('https://idp/x', { id: 'raw-form', flowType: 'unknown', raw: 'grant_type=client_credentials&client_id=abc&client_secret=s3cret&scope=a%20b' });
+      const f = await WebMcpTools.run('get_session_detail', { sessionId: 'raw-form' }, [form]);
+      expect(f.request.body).toMatchObject({ type: 'raw', parsedAs: 'form' });
+      expect(f.request.body.params).toEqual({ grant_type: 'client_credentials', client_id: 'abc', client_secret: '[REDACTED]', scope: 'a b' });
+      expect(JSON.stringify(f)).not.toContain('s3cret');
+
+      const json = makeRequest('https://idp/x', { id: 'raw-json', flowType: 'unknown', raw: JSON.stringify({ username: 'svc@contoso.com', password: 'Hunter2!', nested: { refresh_token: 'rt-1' } }) });
+      const j = await WebMcpTools.run('get_session_detail', { sessionId: 'raw-json' }, [json]);
+      expect(j.request.body).toMatchObject({ type: 'raw', parsedAs: 'json' });
+      expect(j.request.body.params.username).toBe('svc@contoso.com');
+      expect(j.request.body.params.password).toBe('[REDACTED]');
+      expect(j.request.body.params.nested.refresh_token).toBe('[REDACTED]');
+      expect(JSON.stringify(j)).not.toContain('Hunter2!');
+      expect(JSON.stringify(j)).not.toContain('rt-1');
+    });
+
+    it('never returns raw body text that could not be parsed', async () => {
       const big = makeRequest('https://idp/x', { id: 'raw', flowType: 'unknown', raw: 'z'.repeat(10_000) });
       const d = await WebMcpTools.run('get_session_detail', { sessionId: 'raw' }, [big]);
-      expect(d.request.body.type).toBe('raw');
-      expect(d.request.body.raw.length).toBeLessThan(4200);
-      expect(d.request.body.raw).toMatch(/truncated, 10000 chars/);
+      expect(d.request.body).toMatchObject({ type: 'raw', parsedAs: null });
+      expect(d.request.body.raw).toMatch(/\[REDACTED raw body — 10000 chars/);
+      expect(d.request.body.raw).not.toContain('zzz');
+      expect(d.request.body.raw.length).toBeLessThan(200);
     });
   });
 

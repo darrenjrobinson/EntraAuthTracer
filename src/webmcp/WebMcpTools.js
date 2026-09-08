@@ -503,7 +503,22 @@ class WebMcpTools {
     if (body.type === 'json') {
       return { type: 'json', params: WebMcpTools.sanitizeParams(body.data) };
     }
-    return { type: body.type || 'raw', raw: WebMcpTools.truncate(body.data == null ? '' : String(body.data), WebMcpTools.MAX_RAW_BODY) };
+    // Raw (unparsed) bodies follow the same policy as the popup and the exports:
+    // parse as form data or JSON and redact field by field; text that cannot be
+    // parsed is replaced by a placeholder rather than returned to the agent.
+    const type = body.type || 'raw';
+    const raw = body.data == null ? '' : String(body.data);
+    const form = Sanitize.parseFormUrlEncoded(raw);
+    if (form) {
+      const params = {};
+      for (const [k, v] of form) params[k] = k in params ? [].concat(params[k], v) : v;
+      return { type, parsedAs: 'form', params: WebMcpTools.sanitizeParams(params) };
+    }
+    try {
+      const json = JSON.parse(raw);
+      if (json && typeof json === 'object') return { type, parsedAs: 'json', params: WebMcpTools.sanitizeParams(json) };
+    } catch { /* not JSON */ }
+    return { type, parsedAs: null, raw: Sanitize.redactRawText(raw).data };
   }
 
   static sanitizeOAuth(analysis) {

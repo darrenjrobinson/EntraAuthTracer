@@ -627,6 +627,31 @@ describe('SamlDecoder', () => {
       expect(SamlDecoder.parseLite(enc).assertion).toBeNull();
     });
 
+    it('only recognises Signature elements in the XML Signature namespace, like the DOM parser', () => {
+      const foreign = RESPONSE_XML.replace('<samlp:Status>', '<Signature xmlns="urn:example:not-dsig"><Value/></Signature><samlp:Status>');
+      expect(SamlDecoder.parseLite(foreign).messageSigned).toBe(false);
+      expect(SamlDecoder.parse(foreign).messageSigned).toBe(false);
+      const unqualified = RESPONSE_XML.replace('<saml:Subject>', '<Signature><Value/></Signature><saml:Subject>');
+      expect(SamlDecoder.parseLite(unqualified).assertion.signed).toBe(false);
+      const foreignPrefix = RESPONSE_XML.replace('<samlp:Status>', '<x:Signature xmlns:x="urn:example:not-dsig"/><samlp:Status>');
+      expect(SamlDecoder.parseLite(foreignPrefix).messageSigned).toBe(false);
+      // prefix declared on the root element, not on the Signature itself
+      const prefixOnRoot = RESPONSE_XML
+        .replace(/<samlp:Response\b/, '<samlp:Response xmlns:ds="http://www.w3.org/2000/09/xmldsig#"')
+        .replace('<saml:Subject>', '<ds:Signature><ds:SignedInfo/></ds:Signature><saml:Subject>');
+      expect(SamlDecoder.parseLite(prefixOnRoot).assertion.signed).toBe(true);
+      expect(SamlDecoder.parseLite(prefixOnRoot).messageSigned).toBe(false);
+      expect(SamlDecoder.parse(prefixOnRoot).assertion.signed).toBe(true);
+    });
+
+    it('treats only the exact SAML Success URI as success, like the DOM parser', () => {
+      const status = (value) => SamlDecoder.parseLite(RESPONSE_XML.replace('urn:oasis:names:tc:SAML:2.0:status:Success', value)).status;
+      expect(status('urn:oasis:names:tc:SAML:2.0:status:Success').isSuccess).toBe(true);
+      expect(status('urn:example:NotSuccess').isSuccess).toBe(false);
+      expect(status('urn:oasis:names:tc:SAML:2.0:status:Success ').isSuccess).toBe(false);
+      expect(status('urn:oasis:names:tc:SAML:2.0:status:Requester').isSuccess).toBe(false);
+    });
+
     it('parses LogoutRequest and LogoutResponse', () => {
       const lr = SamlDecoder.parseLite(LOGOUT_REQUEST_XML);
       expect(lr).toMatchObject({ messageType: 'LogoutRequest', nameID: 'user@example.com', sessionIndex: '_session1' });
