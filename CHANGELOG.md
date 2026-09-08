@@ -79,6 +79,20 @@ decoding, filtering and redaction defects.
 - Raw request bodies, FIDO2 client data, COSE key descriptions, CBOR hex and error strings were
   interpolated into the popup unescaped
 - Inline `onerror` handler on the popup logo violated the extension's own CSP
+- **Device-code timelines never joined initiation and polls** — initiations were keyed
+  `init:<client>:<time>` and polls `poll:<device_code>`; polls now join the most recent
+  initiation for the same client within 15 minutes
+- Query-string credentials were shown and copied unredacted in the request list, flow chips,
+  detail header and HTTP tab; every displayed or copied URL now goes through the sanitizer
+- Raw request bodies were shown and exported verbatim; they are now parsed (form-urlencoded or
+  JSON) and redacted field by field, or replaced by a placeholder when unparseable
+- FIDO2 authenticator data with AT/ED set but no trailing bytes was accepted silently; it now
+  reports the inconsistency
+- SAML: any `<Signature>` child counted as XMLDSig regardless of namespace; Redirect-binding
+  signatures (`Signature`/`SigAlg` query parameters) were reported as unsigned; status codes
+  merely containing "Success" counted as success
+- `redirect_uri` values with a fragment component (forbidden by RFC 6749 §3.1.2) were accepted
+- A malformed entry in a Verified ID callback's `verifiedCredentialsData` aborted the analysis
 - ESLint failure (unused import) and the deprecated `String.prototype.substr`
 
 ### Security
