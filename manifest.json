@@ -31,7 +31,8 @@
   "permissions": [
     "webRequest",
     "tabs",
-    "storage"
+    "storage",
+    "scripting"
   ],
 
   "host_permissions": [

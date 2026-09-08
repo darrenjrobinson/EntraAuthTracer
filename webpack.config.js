@@ -4,7 +4,11 @@ const CopyPlugin = require('copy-webpack-plugin');
 module.exports = {
   entry: {
     background: './src/background.js',
-    ui: './src/ui.main.js' // emitted as dist/src/ui.js (referenced by ui.html)
+    ui: './src/ui.main.js', // emitted as dist/src/ui.js (referenced by ui.html)
+    // WebMCP mode: injected with chrome.scripting.executeScript, so each must be a
+    // self-contained classic script (no shared chunks)
+    'webmcp-bridge': './src/webmcp-bridge.js', // ISOLATED world
+    'webmcp-page': './src/webmcp-page.js'      // MAIN world
   },
   output: {
     path: path.resolve(__dirname, 'dist'),

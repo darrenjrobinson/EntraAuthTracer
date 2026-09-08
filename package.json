@@ -71,7 +71,9 @@
     ],
     "collectCoverageFrom": [
       "src/**/*.js",
-      "!src/ui.main.js"
+      "!src/ui.main.js",
+      "!src/webmcp-page.js",
+      "!src/webmcp-bridge.js"
     ],
     "coverageThreshold": {
       "global": {
