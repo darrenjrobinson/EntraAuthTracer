@@ -13,6 +13,7 @@
 import Fido2Decoder from './Fido2Decoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 import VerifiedIdDecoder from './VerifiedIdDecoder.js';
+import ProviderDetector from './ProviderDetector.js';
 
 /** Upper bound on captured requests kept in memory — the oldest are evicted first. */
 export const MAX_REQUESTS = 500;
@@ -152,6 +153,7 @@ class SAMLTrace {
       requestBody: null,
       responseBody: null,
       flowType: this.detectFlowType(url, details),
+      provider: ProviderDetector.detect(url),
       status: 'pending',
       error: null
     };
