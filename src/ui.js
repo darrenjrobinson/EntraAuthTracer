@@ -1782,6 +1782,12 @@ class EntraAuthTracerUI {
             <div class="flag-item ${flags.UV ? 'flag-set' : 'flag-unset'}" title="User Verified">
               UV ${flags.UV ? '✓' : '✗'}
             </div>
+            <div class="flag-item ${flags.BE ? 'flag-set' : 'flag-unset'}" title="Backup Eligible — credential may be synced (passkey)">
+              BE ${flags.BE ? '✓' : '✗'}
+            </div>
+            <div class="flag-item ${flags.BS ? 'flag-set' : 'flag-unset'}" title="Backup State — credential is currently backed up">
+              BS ${flags.BS ? '✓' : '✗'}
+            </div>
             <div class="flag-item ${flags.AT ? 'flag-set' : 'flag-unset'}" title="Attested Credential Data">
               AT ${flags.AT ? '✓' : '✗'}
             </div>
@@ -1795,22 +1801,57 @@ class EntraAuthTracerUI {
       // Attested Credential Data (if AT flag is set)
       if (authData.attestedCredentialData) {
         const credData = authData.attestedCredentialData;
+        const authenticator = credData.authenticator;
+        const authenticatorLabel = authenticator
+          ? `${this.escapeHtml(authenticator.name)}${authenticator.vendor ? ` (${this.escapeHtml(authenticator.vendor)})` : ''}`
+          : 'Unknown authenticator';
         html += `
           <div class="fido2-section">
             <h5>🏷️ Attested Credential Data</h5>
             <div class="details-grid">
               <div class="label">AAGUID:</div>
-              <div class="value">${credData.aaguid}</div>
+              <div class="value mono">${this.escapeHtml(credData.aaguid)}</div>
+              <div class="label">Authenticator:</div>
+              <div class="value">${authenticatorLabel}</div>
               <div class="label">Credential ID Length:</div>
-              <div class="value">${credData.credentialIdLength} bytes</div>
+              <div class="value">${this.escapeHtml(credData.credentialIdLength)} bytes</div>
               <div class="label">Credential ID:</div>
-              <div class="value" title="${credData.credentialId}">${credData.credentialId.substring(0, 40)}...</div>
+              <div class="value" title="${this.escapeHtml(credData.credentialId)}">${this.escapeHtml(String(credData.credentialId).substring(0, 40))}...</div>
             </div>
-            
+
             ${this.renderPublicKeyInfo(credData.credentialPublicKey)}
           </div>
         `;
       }
+
+      // Extensions (if ED flag is set)
+      if (authData.extensions) {
+        html += `
+          <div class="fido2-section">
+            <h5>🧩 Authenticator Extensions</h5>
+            <pre class="cbor-hex">${this.escapeHtml(JSON.stringify(authData.extensions, null, 2))}</pre>
+          </div>
+        `;
+      }
+    }
+
+    // Attestation statement (registration ceremonies)
+    if (fido2Data.attestationObject) {
+      const att = fido2Data.attestationObject;
+      const stmt = att.attStmt || {};
+      html += `
+        <div class="fido2-section">
+          <h5>📜 Attestation Statement</h5>
+          <div class="details-grid">
+            <div class="label">Format:</div>
+            <div class="value">${this.escapeHtml(att.fmt || 'unknown')}</div>
+            ${stmt.algorithmDescription ? `<div class="label">Algorithm:</div><div class="value">${this.escapeHtml(stmt.algorithmDescription)}</div>` : ''}
+            <div class="label">Certificates (x5c):</div>
+            <div class="value">${this.escapeHtml(stmt.x5cCount || 0)}</div>
+            ${stmt.sigHex ? `<div class="label">Signature:</div><div class="value mono" title="${this.escapeHtml(stmt.sigHex)}">${this.escapeHtml(stmt.sigHex.substring(0, 40))}...</div>` : ''}
+          </div>
+        </div>
+      `;
     }
 
     return html;
