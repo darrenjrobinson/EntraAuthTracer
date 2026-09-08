@@ -10,9 +10,9 @@
 // module-level listener registration harmless. Every test gets a fresh state
 // object (see beforeEach below) so suites cannot leak state into each other.
 
-import samltrace from '../src/SAMLTrace.js';
+import samltrace, { MAX_REQUESTS, MAX_FIDO2_SESSIONS } from '../src/SAMLTrace.js';
 import Fido2Decoder from '../src/Fido2Decoder.js';
-import { makeState, makeDetails } from './helpers.js';
+import { makeState, makeDetails, captureWebRequestListeners } from './helpers.js';
 
 // ─── Test suites ─────────────────────────────────────────────────────────────
 
@@ -885,6 +885,250 @@ describe('SAMLTrace', () => {
       const before = JSON.parse(JSON.stringify(state.requests));
       samltrace.handleError({ url: 'https://other.com/', method: 'GET', timeStamp: now, error: 'net::ERR_FAILED' });
       expect(state.requests).toEqual(before);
+    });
+  });
+
+  // ─── analyzeRequest ───────────────────────────────────────────────────────
+
+  describe('analyzeRequest', () => {
+    it('returns the full captured-request shape for an auth request', () => {
+      const details = makeDetails('https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=x&state=s', 'GET', { tabId: 42, type: 'main_frame' });
+      const req = samltrace.analyzeRequest(details);
+      expect(req).toEqual(expect.objectContaining({
+        url: details.url,
+        method: 'GET',
+        tabId: 42,
+        type: 'main_frame',
+        chromeRequestId: details.requestId,
+        flowType: 'oauth_authorize',
+        status: 'pending',
+        error: null,
+        requestHeaders: [],
+        responseHeaders: [],
+        requestBody: null,
+        responseBody: null
+      }));
+      expect(req.id).toMatch(/^req_/);
+      expect(typeof req.timestamp).toBe('number');
+    });
+
+    it('returns null for a request that is not authentication traffic', () => {
+      expect(samltrace.analyzeRequest(makeDetails('https://www.example.com/index.html'))).toBeNull();
+    });
+
+    it('extracts the body only for POST requests', () => {
+      const body = { formData: { grant_type: ['client_credentials'], client_id: ['x'] } };
+      const post = samltrace.analyzeRequest(makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/token', 'POST', { requestBody: body }));
+      expect(post.requestBody).toEqual({ type: 'formData', data: body.formData });
+      const get = samltrace.analyzeRequest(makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/token', 'GET', { requestBody: body }));
+      expect(get.requestBody).toBeNull();
+    });
+
+    it('records a null chromeRequestId when Chrome does not supply one', () => {
+      const details = makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/authorize');
+      delete details.requestId;
+      expect(samltrace.analyzeRequest(details).chromeRequestId).toBeNull();
+    });
+  });
+
+  // ─── findRequest by Chrome requestId ──────────────────────────────────────
+
+  describe('findRequest — requestId matching', () => {
+    it('resolves two identical polls captured within the same second by requestId', () => {
+      const now = Date.now();
+      const url = 'https://login.microsoftonline.com/t/oauth2/v2.0/token';
+      samltrace.state = makeState({
+        requests: [
+          { id: 'r1', chromeRequestId: '1001', url, method: 'POST', timestamp: now },
+          { id: 'r2', chromeRequestId: '1002', url, method: 'POST', timestamp: now + 10 }
+        ]
+      });
+      expect(samltrace.findRequest({ requestId: '1002', url, method: 'POST', timeStamp: now + 15 }).id).toBe('r2');
+      expect(samltrace.findRequest({ requestId: '1001', url, method: 'POST', timeStamp: now + 15 }).id).toBe('r1');
+    });
+
+    it('does not fall back to the heuristic when both sides carry a requestId that does not match', () => {
+      const now = Date.now();
+      const url = 'https://login.microsoftonline.com/t/oauth2/v2.0/token';
+      samltrace.state = makeState({ requests: [{ id: 'r1', chromeRequestId: '1001', url, method: 'POST', timestamp: now }] });
+      expect(samltrace.findRequest({ requestId: '9999', url, method: 'POST', timeStamp: now })).toBeUndefined();
+    });
+
+    it('uses the url/method/time heuristic when the stored request has no requestId (legacy capture)', () => {
+      const now = Date.now();
+      const url = 'https://login.microsoftonline.com/t/oauth2/v2.0/token';
+      samltrace.state = makeState({ requests: [{ id: 'legacy', url, method: 'POST', timestamp: now }] });
+      expect(samltrace.findRequest({ requestId: '1', url, method: 'POST', timeStamp: now + 100 }).id).toBe('legacy');
+    });
+  });
+
+  // ─── Full webRequest lifecycle through the registered listeners ───────────
+
+  describe('webRequest lifecycle via registered listeners', () => {
+    let listeners;
+
+    beforeEach(() => {
+      samltrace.isListening = false;
+      samltrace.initialize(makeState());
+      listeners = captureWebRequestListeners();
+    });
+
+    it('registers a function for every event with <all_urls> filters', () => {
+      for (const fn of Object.values(listeners)) expect(typeof fn).toBe('function');
+      const filterArg = chrome.webRequest.onBeforeRequest.addListener.mock.calls.at(-1)[1];
+      expect(filterArg).toEqual({ urls: ['<all_urls>'] });
+      expect(chrome.webRequest.onBeforeRequest.addListener.mock.calls.at(-1)[2]).toEqual(['requestBody']);
+    });
+
+    it('carries one request from onBeforeRequest to onCompleted by requestId', () => {
+      const details = makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/token', 'POST', {
+        requestBody: { formData: { grant_type: ['client_credentials'], client_id: ['svc'] } }
+      });
+      listeners.onBeforeRequest(details);
+      listeners.onBeforeSendHeaders({ ...details, requestHeaders: [{ name: 'Authorization', value: 'Basic ' + btoa('svc:s3cret') }] });
+      listeners.onHeadersReceived({ ...details, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }], statusCode: 200 });
+      listeners.onCompleted({ ...details, statusCode: 200 });
+
+      const [req] = samltrace.state.requests;
+      expect(samltrace.state.requests).toHaveLength(1);
+      expect(req.chromeRequestId).toBe(details.requestId);
+      expect(req.status).toBe('completed');
+      expect(req.statusCode).toBe(200);
+      expect(req.requestHeaders[0].name).toBe('Authorization');
+      expect(req.responseHeaders[0].value).toBe('application/json');
+      // Header enrichment ran: the Basic credential reclassified the client auth method
+      expect(req.oauthAnalysis.authMethod).toBe('client_secret_basic');
+      expect(req.oauthAnalysis.clientId).toBe('svc');
+      expect(req.oauthAnalysis.warnings.map(w => w.rule)).toContain('client_auth_secret_basic');
+      expect(samltrace.state.onNewAuthRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks a request as errored through onErrorOccurred', () => {
+      const details = makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/authorize?client_id=x');
+      listeners.onBeforeRequest(details);
+      listeners.onErrorOccurred({ ...details, error: 'net::ERR_CONNECTION_RESET' });
+      expect(samltrace.state.requests[0].status).toBe('error');
+      expect(samltrace.state.requests[0].error).toBe('net::ERR_CONNECTION_RESET');
+    });
+
+    it('attaches headers to the right request when two identical polls are in flight', () => {
+      const url = 'https://login.microsoftonline.com/t/oauth2/v2.0/token';
+      const body = { formData: { grant_type: ['urn:ietf:params:oauth:grant-type:device_code'], device_code: ['dc-1'], client_id: ['app'] } };
+      const first = makeDetails(url, 'POST', { requestBody: body });
+      const second = makeDetails(url, 'POST', { requestBody: body });
+      listeners.onBeforeRequest(first);
+      listeners.onBeforeRequest(second);
+      listeners.onHeadersReceived({ ...second, responseHeaders: [], statusCode: 400 });
+      listeners.onCompleted({ ...second, statusCode: 400 });
+      const [r1, r2] = samltrace.state.requests;
+      expect(r1.status).toBe('pending');
+      expect(r2.status).toBe('completed');
+      expect(r2.statusCode).toBe(400);
+    });
+
+    it('stopListening removes exactly the functions that were registered', () => {
+      samltrace.stopListening();
+      const events = ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived', 'onCompleted', 'onErrorOccurred'];
+      for (const ev of events) {
+        expect(chrome.webRequest[ev].removeListener).toHaveBeenCalledWith(listeners[ev]);
+      }
+      expect(samltrace.isListening).toBe(false);
+    });
+  });
+
+  // ─── Bounded buffers ──────────────────────────────────────────────────────
+
+  describe('request buffer limits', () => {
+    it('exports sensible caps', () => {
+      expect(MAX_REQUESTS).toBeGreaterThanOrEqual(100);
+      expect(MAX_FIDO2_SESSIONS).toBeGreaterThanOrEqual(10);
+    });
+
+    it('evicts the oldest request once MAX_REQUESTS is reached and prunes its correlation entry', () => {
+      const state = makeState();
+      for (let i = 0; i < MAX_REQUESTS; i++) {
+        state.requests.push({ id: `r${i}`, url: 'https://x/', method: 'GET', timestamp: i, deviceCodeCorrelationKey: i === 0 ? 'poll:old' : undefined });
+      }
+      state.deviceCodeCorrelation.set('poll:old', ['r0', 'r7']);
+      samltrace.state = state;
+
+      samltrace.handleBeforeRequest(makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/authorize?client_id=x'));
+
+      expect(state.requests).toHaveLength(MAX_REQUESTS);
+      expect(state.requests.find(r => r.id === 'r0')).toBeUndefined();
+      expect(state.requests.at(-1).flowType).toBe('oauth_authorize');
+      expect(state.deviceCodeCorrelation.get('poll:old')).toEqual(['r7']);
+    });
+
+    it('deletes a correlation key once its last request is evicted', () => {
+      const state = makeState();
+      for (let i = 0; i < MAX_REQUESTS; i++) {
+        state.requests.push({ id: `r${i}`, url: 'https://x/', method: 'GET', timestamp: i });
+      }
+      state.deviceCodeCorrelation.set('init:app:1', ['r0']);
+      samltrace.state = state;
+      samltrace.handleBeforeRequest(makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/authorize?client_id=x'));
+      expect(state.deviceCodeCorrelation.has('init:app:1')).toBe(false);
+    });
+
+    it('caps fido2Sessions at MAX_FIDO2_SESSIONS', () => {
+      const state = makeState();
+      for (let i = 0; i < MAX_FIDO2_SESSIONS; i++) state.fido2Sessions.push({ id: `f${i}` });
+      samltrace.state = state;
+      jest.spyOn(Fido2Decoder, 'decodeFido2Request').mockReturnValue({ clientDataJSON: { type: 'webauthn.get' } });
+      samltrace.handleFido2Request({ id: 'new', timestamp: Date.now(), flowType: 'fido2_assertion', requestBody: { type: 'json', data: {} } });
+      Fido2Decoder.decodeFido2Request.mockRestore();
+      expect(state.fido2Sessions).toHaveLength(MAX_FIDO2_SESSIONS);
+      expect(state.fido2Sessions[0].id).toBe('f1');
+      expect(state.fido2Sessions.at(-1).id).toBe('new');
+    });
+  });
+
+  // ─── Flow dispatch and provider coverage ──────────────────────────────────
+
+  describe('provider and grant coverage', () => {
+    function detect(urlStr, method = 'GET', requestBody = null) {
+      return samltrace.detectFlowType(new URL(urlStr), makeDetails(urlStr, method, { requestBody }));
+    }
+
+    it('dispatches ropc token requests to the OAuth analyser', () => {
+      const details = makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/token', 'POST', {
+        requestBody: { formData: { grant_type: ['password'], username: ['u@contoso.com'], password: ['p'], client_id: ['app'] } }
+      });
+      samltrace.handleBeforeRequest(details);
+      const [req] = samltrace.state.requests;
+      expect(req.flowType).toBe('ropc');
+      expect(req.oauthAnalysis.grantType).toBe('password');
+      expect(req.oauthAnalysis.warnings.map(w => w.rule)).toContain('ropc_deprecated');
+    });
+
+    it('classifies an AWS Cognito token request from its body', () => {
+      const rb = { formData: { grant_type: ['client_credentials'], client_id: ['x'] } };
+      expect(detect('https://mypool.auth.us-east-1.amazoncognito.com/oauth2/token', 'POST', rb)).toBe('client_credentials');
+    });
+
+    it('classifies Cognito hosted-UI /login as an authentication request', () => {
+      const url = new URL('https://mypool.auth.us-east-1.amazoncognito.com/login?client_id=x&redirect_uri=https://app/cb');
+      expect(samltrace.isAuthenticationRequest(url, makeDetails(url.href))).toBe(true);
+    });
+
+    it('classifies IdentityServer /connect/deviceauthorization as device_code_initiation', () => {
+      expect(detect('https://auth.example.com/connect/deviceauthorization', 'POST')).toBe('device_code_initiation');
+    });
+
+    it('classifies a Shibboleth redirect-binding request as saml', () => {
+      expect(detect('https://sp.university.edu/Shibboleth.sso/SAML2/Redirect?SAMLRequest=abc')).toBe('saml');
+    });
+
+    it('classifies Google token and Firebase securetoken endpoints as OAuth', () => {
+      expect(detect('https://oauth2.googleapis.com/token', 'POST', { formData: { grant_type: ['refresh_token'] } })).toBe('refresh_token');
+      expect(detect('https://securetoken.googleapis.com/v1/token?key=AIza', 'POST')).toBe('oauth_token');
+    });
+  });
+
+  describe('generateRequestId format', () => {
+    it('produces req_<timestamp>_<base36> identifiers', () => {
+      expect(samltrace.generateRequestId()).toMatch(/^req_\d{13}_[a-z0-9]{1,9}$/);
     });
   });
 });

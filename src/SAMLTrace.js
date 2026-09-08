@@ -14,10 +14,24 @@ import Fido2Decoder from './Fido2Decoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 import VerifiedIdDecoder from './VerifiedIdDecoder.js';
 
+/** Upper bound on captured requests kept in memory — the oldest are evicted first. */
+export const MAX_REQUESTS = 500;
+/** Upper bound on decoded FIDO2 sessions kept in memory. */
+export const MAX_FIDO2_SESSIONS = 100;
+
 class SAMLTrace {
   constructor() {
     this.state = null;
     this.isListening = false;
+
+    // Stable listener references: chrome.webRequest.*.removeListener only works
+    // with the exact function that was registered, so bind once here rather
+    // than creating fresh bound copies in startListening.
+    this._onBeforeRequest = (details) => this.handleBeforeRequest(details);
+    this._onBeforeSendHeaders = (details) => this.handleBeforeSendHeaders(details);
+    this._onHeadersReceived = (details) => this.handleHeadersReceived(details);
+    this._onCompleted = (details) => this.handleCompleted(details);
+    this._onErrorOccurred = (details) => this.handleError(details);
   }
 
   /**
@@ -36,31 +50,31 @@ class SAMLTrace {
 
     // Register request interceptors
     chrome.webRequest.onBeforeRequest.addListener(
-      this.handleBeforeRequest.bind(this),
+      this._onBeforeRequest,
       { urls: ['<all_urls>'] },
       ['requestBody'] // requestBody is read-only in MV3 (blocking removed)
     );
 
     chrome.webRequest.onBeforeSendHeaders.addListener(
-      this.handleBeforeSendHeaders.bind(this),
+      this._onBeforeSendHeaders,
       { urls: ['<all_urls>'] },
       ['requestHeaders']
     );
 
     chrome.webRequest.onHeadersReceived.addListener(
-      this.handleHeadersReceived.bind(this),
+      this._onHeadersReceived,
       { urls: ['<all_urls>'] },
       ['responseHeaders']
     );
 
     chrome.webRequest.onCompleted.addListener(
-      this.handleCompleted.bind(this),
+      this._onCompleted,
       { urls: ['<all_urls>'] },
       ['responseHeaders']
     );
 
     chrome.webRequest.onErrorOccurred.addListener(
-      this.handleError.bind(this),
+      this._onErrorOccurred,
       { urls: ['<all_urls>'] }
     );
 
@@ -74,11 +88,11 @@ class SAMLTrace {
   stopListening() {
     if (!this.isListening) return;
 
-    chrome.webRequest.onBeforeRequest.removeListener(this.handleBeforeRequest);
-    chrome.webRequest.onBeforeSendHeaders.removeListener(this.handleBeforeSendHeaders);
-    chrome.webRequest.onHeadersReceived.removeListener(this.handleHeadersReceived);
-    chrome.webRequest.onCompleted.removeListener(this.handleCompleted);
-    chrome.webRequest.onErrorOccurred.removeListener(this.handleError);
+    chrome.webRequest.onBeforeRequest.removeListener(this._onBeforeRequest);
+    chrome.webRequest.onBeforeSendHeaders.removeListener(this._onBeforeSendHeaders);
+    chrome.webRequest.onHeadersReceived.removeListener(this._onHeadersReceived);
+    chrome.webRequest.onCompleted.removeListener(this._onCompleted);
+    chrome.webRequest.onErrorOccurred.removeListener(this._onErrorOccurred);
 
     this.isListening = false;
     console.log('SAMLTrace: Stopped listening for requests');
@@ -93,7 +107,8 @@ class SAMLTrace {
       const requestData = this.analyzeRequest(details);
       if (!requestData) return {};
 
-      // Store request data
+      // Store request data (bounded FIFO — the oldest captures are evicted first)
+      this._evictIfFull();
       this.state.requests.push(requestData);
 
       // Notify badge counter
@@ -123,6 +138,8 @@ class SAMLTrace {
 
     const requestData = {
       id: this.generateRequestId(),
+      // Chrome's own request id — stable across every webRequest event for this request
+      chromeRequestId: details.requestId ?? null,
       timestamp: Date.now(),
       url: details.url,
       method: details.method,
@@ -440,7 +457,10 @@ class SAMLTrace {
           timestamp: requestData.timestamp,
           decoded: fido2Data
         };
-        
+
+        while (this.state.fido2Sessions.length >= MAX_FIDO2_SESSIONS) {
+          this.state.fido2Sessions.shift();
+        }
         this.state.fido2Sessions.push(sessionData);
         
         console.log('FIDO2 request processed:', {
@@ -603,21 +623,56 @@ class SAMLTrace {
   }
 
   /**
-   * Find a request by details
+   * Find the stored request that a later webRequest event belongs to.
+   *
+   * Chrome supplies the same requestId on every event for a request, so that is
+   * matched first. The url + method + 1-second window heuristic remains only for
+   * records that lack a Chrome id (older captures / synthetic input) — it cannot
+   * distinguish identical requests issued within the same second.
    */
   findRequest(details) {
-    return this.state.requests.find(req => 
-      req.url === details.url && 
-      req.method === details.method &&
-      Math.abs(req.timestamp - details.timeStamp) < 1000 // Within 1 second
-    );
+    return this.state.requests.find(req => {
+      if (details.requestId != null && req.chromeRequestId != null) {
+        return req.chromeRequestId === details.requestId;
+      }
+      return req.url === details.url &&
+        req.method === details.method &&
+        Math.abs(req.timestamp - details.timeStamp) < 1000; // Within 1 second
+    });
+  }
+
+  /**
+   * Evict the oldest captured requests once the buffer is full, keeping the
+   * device-code correlation map consistent with what is still stored.
+   */
+  _evictIfFull() {
+    const requests = this.state.requests;
+    while (requests.length >= MAX_REQUESTS) {
+      const evicted = requests.shift();
+      if (evicted) this._pruneCorrelation(evicted.id);
+    }
+  }
+
+  /**
+   * Remove a request id from every device-code correlation entry, deleting
+   * entries that become empty.
+   */
+  _pruneCorrelation(requestId) {
+    const map = this.state.deviceCodeCorrelation;
+    if (!map || typeof map.forEach !== 'function') return;
+    for (const [key, ids] of map) {
+      const idx = ids.indexOf(requestId);
+      if (idx === -1) continue;
+      ids.splice(idx, 1);
+      if (ids.length === 0) map.delete(key);
+    }
   }
 
   /**
    * Generate unique request ID
    */
   generateRequestId() {
-    return 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    return 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
   }
 
   /**
