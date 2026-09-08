@@ -650,6 +650,8 @@ describe('OAuthDecoder.analyzeTokenRequest — password (ROPC)', () => {
 describe('OAuthDecoder.assessRedirectUri', () => {
   it.each([
     ['https://app.contoso.com/callback', null, null],
+    ['https://app.contoso.com/callback#fragment', 'redirect_uri_fragment', 'warning'],
+    ['http://localhost:8400/callback#state', 'redirect_uri_fragment', 'warning'],
     ['http://localhost:8400/callback', 'redirect_uri_loopback_http', 'info'],
     ['http://127.0.0.1/cb', 'redirect_uri_loopback_http', 'info'],
     ['http://[::1]:5000/cb', 'redirect_uri_loopback_http', 'info'],
@@ -699,7 +701,7 @@ describe('OAuthDecoder warning rule ids', () => {
   const KNOWN_RULES = new Set([
     'pkce_missing', 'pkce_method_not_s256', 'pkce_verifier_missing', 'state_missing', 'implicit_flow',
     'ropc_deprecated', 'redirect_uri_http', 'redirect_uri_loopback_http', 'redirect_uri_oob',
-    'redirect_uri_invalid', 'redirect_uri_custom_scheme', 'client_auth_secret_post',
+    'redirect_uri_invalid', 'redirect_uri_custom_scheme', 'redirect_uri_fragment', 'client_auth_secret_post',
     'client_auth_secret_basic', 'client_auth_digest', 'client_auth_secret', 'token_request_no_body',
     'grant_type_missing'
   ]);

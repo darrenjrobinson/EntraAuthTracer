@@ -579,6 +579,14 @@ class OAuthDecoder {
       }];
     }
 
+    if (parsed.hash) {
+      return [{
+        rule: 'redirect_uri_fragment',
+        severity: 'warning',
+        message: `redirect_uri contains a fragment (${parsed.hash.substring(0, 40)}) — RFC 6749 §3.1.2 forbids fragment components in the redirection endpoint URI`
+      }];
+    }
+
     if (parsed.protocol === 'https:') return [];
 
     if (parsed.protocol === 'http:') {
