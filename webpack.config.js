@@ -4,7 +4,7 @@ const CopyPlugin = require('copy-webpack-plugin');
 module.exports = {
   entry: {
     background: './src/background.js',
-    ui: './src/ui.js'
+    ui: './src/ui.main.js' // emitted as dist/src/ui.js (referenced by ui.html)
   },
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -50,5 +50,8 @@ module.exports = {
   },
   optimization: {
     minimize: false // Keep readable for debugging
+  },
+  performance: {
+    hints: false // Extension bundles are loaded locally; web asset-size budgets do not apply
   }
 };

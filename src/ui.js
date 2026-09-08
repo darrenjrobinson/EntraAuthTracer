@@ -1981,7 +1981,6 @@ class EntraAuthTracerUI {
 
 }
 
-// Initialize UI when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-  new EntraAuthTracerUI();
-});
+// The popup is bootstrapped by src/ui.main.js; exporting the class keeps this
+// module side-effect free so it can be exercised under jsdom.
+export default EntraAuthTracerUI;
