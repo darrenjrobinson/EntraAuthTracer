@@ -116,9 +116,11 @@ class VerifiedIdDecoder {
     if (typeof body.requestId === 'string' && !result.requestId) result.requestId = body.requestId;
     if (body.subject) result.subject = String(body.subject);
     if (Array.isArray(body.verifiedCredentialsData)) {
+      // Callback payloads are untrusted input — skip malformed entries rather than failing the analysis
       result.verifiedCredentialTypes = body.verifiedCredentialsData
-        .map(c => (Array.isArray(c.type) ? c.type.join(', ') : c.type))
-        .filter(Boolean);
+        .filter(c => c && typeof c === 'object')
+        .map(c => (Array.isArray(c.type) ? c.type.filter(t => typeof t === 'string').join(', ') : c.type))
+        .filter(t => typeof t === 'string' && t.length > 0);
     }
 
     // ─── OpenID4VP (vp_token / presentation_definition) ───────────────────

@@ -515,6 +515,23 @@ describe('VerifiedIdDecoder — callback payloads, status lists and OpenID4VP fi
     expect(result.verifiedCredentialTypes).toEqual(['VerifiableCredential, VerifiedEmployee']);
   });
 
+  it('skips malformed verifiedCredentialsData entries instead of failing the analysis', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://contoso.example.com/api/verifier/presentation-callback',
+      'did_callback',
+      {
+        type: 'json',
+        data: {
+          requestStatus: 'presentation_verified',
+          verifiedCredentialsData: [null, 'not-an-object', {}, { type: 42 }, { type: ['VerifiableCredential', 7, 'VerifiedEmployee'] }, { type: 'VerifiedId' }]
+        }
+      }
+    ));
+    expect(result.error).toBeUndefined();
+    expect(result.requestStatus).toBe('presentation_verified');
+    expect(result.verifiedCredentialTypes).toEqual(['VerifiableCredential, VerifiedEmployee', 'VerifiedId']);
+  });
+
   it('prefers the request id from the URL path over the body', () => {
     const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
       'https://verifiedid.did.msidentity.com/v1.0/verifiableCredentials/requests/abcd1234',
