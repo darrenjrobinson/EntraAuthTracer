@@ -172,13 +172,15 @@ class Fido2Decoder {
 
     let offset = 37;
 
-    if (result.flags.AT && u8.byteLength > offset) {
+    // The flags are authenticated data: when AT/ED are set the corresponding bytes
+    // must follow, so parse unconditionally and let missing data surface as an error.
+    if (result.flags.AT) {
       const attested = this.parseAttestedCredentialData(u8.subarray(offset));
       result.attestedCredentialData = attested;
       offset += 18 + attested.credentialIdLength + (attested.credentialPublicKey.size || 0);
     }
 
-    if (result.flags.ED && u8.byteLength > offset) {
+    if (result.flags.ED) {
       try {
         const ext = CBOR.decodeFirstSync(new Uint8Array(u8.subarray(offset)), { extendedResults: true });
         result.extensions = this.cborToPlain(ext.value);

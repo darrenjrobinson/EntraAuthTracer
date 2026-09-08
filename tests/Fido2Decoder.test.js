@@ -489,6 +489,25 @@ describe('Fido2Decoder', () => {
       expect(attested.authenticator.kind).toBe('unknown');
     });
 
+    it('rejects authenticatorData whose AT flag is set but no attested credential bytes follow', () => {
+      const header = buildAuthenticatorData({ flags: { UP: true, AT: true } }).bytes.subarray(0, 37);
+      expect(() => Fido2Decoder.decodeAuthenticatorData(b64url(header))).toThrow(/attested credential data too short/);
+    });
+
+    it('records an extension decoding error when ED is set but no extension bytes follow', () => {
+      const header = buildAuthenticatorData({ flags: { UP: true, ED: true } }).bytes.subarray(0, 37);
+      const result = Fido2Decoder.decodeAuthenticatorData(b64url(header));
+      expect(result.flags.ED).toBe(true);
+      expect(result.extensions).toEqual({ error: expect.stringMatching(/Extension decoding failed/) });
+    });
+
+    it('surfaces inconsistent flags as a request-level error rather than a silent null', () => {
+      const header = buildAuthenticatorData({ flags: { UP: true, AT: true } }).bytes.subarray(0, 37);
+      const result = Fido2Decoder.decodeFido2Request({ type: 'json', data: { authenticatorData: b64url(header) } });
+      expect(result.authenticatorData).toBeNull();
+      expect(result.error).toMatch(/attested credential data too short/);
+    });
+
     it('rejects a credential id longer than the buffer', () => {
       // AAGUID (16 zero bytes) + declared length 0x0100 but no credential bytes follow
       const attested = new Uint8Array([...bytes(16), 0x01, 0x00]);
