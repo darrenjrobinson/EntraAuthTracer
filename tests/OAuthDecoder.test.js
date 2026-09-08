@@ -3,6 +3,7 @@
  */
 
 import OAuthDecoder from '../src/OAuthDecoder.js';
+import { buildJwt } from './helpers.js';
 
 // ─── Helper: build a minimal requestData object ───────────────────────────────
 
@@ -566,5 +567,204 @@ describe('OAuthDecoder.enrichWithHeaders', () => {
     const before = JSON.parse(JSON.stringify(analysis));
     OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Content-Type', 'application/x-www-form-urlencoded'));
     expect(analysis).toEqual(before);
+  });
+
+  it('replaces only client_auth_* warnings, keeping unrelated findings', () => {
+    const analysis = makeAnalysis({
+      warnings: [
+        { rule: 'pkce_verifier_missing', severity: 'info', message: 'Token exchange without code_verifier — PKCE is required for public clients in OAuth 2.1' },
+        { rule: 'client_auth_secret_post', severity: 'info', message: 'Using client_secret in POST body (client_secret_post) — consider client_secret_basic or certificate-based authentication' }
+      ]
+    });
+    OAuthDecoder.enrichWithHeaders(analysis, makeHeaders('Authorization', 'Basic ' + btoa('c:s')));
+    const rules = analysis.warnings.map(w => w.rule);
+    expect(rules).toContain('pkce_verifier_missing');
+    expect(rules).toContain('client_auth_secret_basic');
+    expect(rules).not.toContain('client_auth_secret_post');
+  });
+});
+
+// ─── ROPC (password grant) ────────────────────────────────────────────────────
+
+describe('OAuthDecoder.analyzeTokenRequest — password (ROPC)', () => {
+  const tokenUrl = 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token';
+
+  function ropc(extra = {}) {
+    return makeRequest(tokenUrl, 'POST', {
+      grant_type: 'password',
+      client_id: 'legacy-script',
+      username: 'alice@contoso.com',
+      password: 'Hunter2!',
+      scope: 'openid https://graph.microsoft.com/User.Read',
+      ...extra
+    });
+  }
+
+  it('dispatches to the ROPC analyser', () => {
+    const result = OAuthDecoder.analyzeTokenRequest(ropc().requestBody, new URLSearchParams());
+    expect(result.requestType).toBe('token_request');
+    expect(result.grantType).toBe('password');
+    expect(result.label).toBe(OAuthDecoder.GRANT_TYPES.password.label);
+    expect(result.clientId).toBe('legacy-script');
+    expect(result.scopes).toEqual(['openid', 'https://graph.microsoft.com/User.Read']);
+  });
+
+  it('raises an error-severity ropc_deprecated warning', () => {
+    const result = OAuthDecoder.analyzeTokenRequest(ropc().requestBody, new URLSearchParams());
+    const w = result.warnings.find(x => x.rule === 'ropc_deprecated');
+    expect(w).toBeDefined();
+    expect(w.severity).toBe('error');
+    expect(w.message).toMatch(/OAuth 2\.1/);
+  });
+
+  it('reports username presence and domain but never the credential values', () => {
+    const result = OAuthDecoder.analyzeTokenRequest(ropc().requestBody, new URLSearchParams());
+    expect(result.usernamePresent).toBe(true);
+    expect(result.usernameDomain).toBe('contoso.com');
+    expect(result.passwordPresent).toBe(true);
+    const serialised = JSON.stringify(result);
+    expect(serialised).not.toContain('alice@contoso.com');
+    expect(serialised).not.toContain('Hunter2!');
+  });
+
+  it('classifies a public client when no client credential is sent', () => {
+    const result = OAuthDecoder.analyzeTokenRequest(ropc().requestBody, new URLSearchParams());
+    expect(result.authMethod).toBe('public');
+  });
+
+  it('classifies client_secret_post and adds the client_auth_secret_post note', () => {
+    const result = OAuthDecoder.analyzeTokenRequest(ropc({ client_secret: 's3cret' }).requestBody, new URLSearchParams());
+    expect(result.authMethod).toBe('client_secret_post');
+    expect(result.warnings.map(w => w.rule)).toEqual(['ropc_deprecated', 'client_auth_secret_post']);
+  });
+
+  it('is reachable through analyzeRequest and detectFlowTypeFromBody', () => {
+    const req = ropc();
+    expect(OAuthDecoder.analyzeRequest(req).grantType).toBe('password');
+    expect(OAuthDecoder.detectFlowTypeFromBody(req.requestBody)).toBe('ropc');
+  });
+});
+
+// ─── redirect_uri assessment ──────────────────────────────────────────────────
+
+describe('OAuthDecoder.assessRedirectUri', () => {
+  it.each([
+    ['https://app.contoso.com/callback', null, null],
+    ['http://localhost:8400/callback', 'redirect_uri_loopback_http', 'info'],
+    ['http://127.0.0.1/cb', 'redirect_uri_loopback_http', 'info'],
+    ['http://[::1]:5000/cb', 'redirect_uri_loopback_http', 'info'],
+    ['http://app.contoso.com/callback', 'redirect_uri_http', 'warning'],
+    ['urn:ietf:wg:oauth:2.0:oob', 'redirect_uri_oob', 'warning'],
+    ['msauth://com.contoso.app/abc', 'redirect_uri_custom_scheme', 'info'],
+    ['not a uri', 'redirect_uri_invalid', 'warning']
+  ])('%s → %s', (uri, rule, severity) => {
+    const result = OAuthDecoder.assessRedirectUri(uri);
+    if (rule === null) {
+      expect(result).toEqual([]);
+    } else {
+      expect(result).toHaveLength(1);
+      expect(result[0].rule).toBe(rule);
+      expect(result[0].severity).toBe(severity);
+    }
+  });
+
+  it('returns no warning when redirect_uri is absent', () => {
+    expect(OAuthDecoder.assessRedirectUri(null)).toEqual([]);
+    expect(OAuthDecoder.assessRedirectUri('')).toEqual([]);
+  });
+
+  it('surfaces redirectUri and an http warning on authorization requests', () => {
+    const params = new URLSearchParams({
+      response_type: 'code', client_id: 'app', state: 's', code_challenge: 'c', code_challenge_method: 'S256',
+      redirect_uri: 'http://app.contoso.com/callback'
+    });
+    const result = OAuthDecoder.analyzeAuthorizationRequest(params, null);
+    expect(result.redirectUri).toBe('http://app.contoso.com/callback');
+    expect(result.warnings.map(w => w.rule)).toContain('redirect_uri_http');
+  });
+
+  it('assesses redirect_uri on the token exchange as well', () => {
+    const req = makeRequest('https://login.microsoftonline.com/t/oauth2/v2.0/token', 'POST', {
+      grant_type: 'authorization_code', client_id: 'app', code: 'c', code_verifier: 'v'.repeat(43),
+      redirect_uri: 'http://localhost/cb'
+    });
+    const result = OAuthDecoder.analyzeTokenRequest(req.requestBody, new URLSearchParams());
+    expect(result.warnings.map(w => w.rule)).toContain('redirect_uri_loopback_http');
+  });
+});
+
+// ─── Warning rule ids ─────────────────────────────────────────────────────────
+
+describe('OAuthDecoder warning rule ids', () => {
+  const KNOWN_RULES = new Set([
+    'pkce_missing', 'pkce_method_not_s256', 'pkce_verifier_missing', 'state_missing', 'implicit_flow',
+    'ropc_deprecated', 'redirect_uri_http', 'redirect_uri_loopback_http', 'redirect_uri_oob',
+    'redirect_uri_invalid', 'redirect_uri_custom_scheme', 'client_auth_secret_post',
+    'client_auth_secret_basic', 'client_auth_digest', 'client_auth_secret', 'token_request_no_body',
+    'grant_type_missing'
+  ]);
+
+  const analyses = [
+    () => OAuthDecoder.analyzeAuthorizationRequest(new URLSearchParams({ response_type: 'token', client_id: 'x', code_challenge_method: 'plain', redirect_uri: 'http://x.y/cb' }), null),
+    () => OAuthDecoder.analyzeTokenRequest(null, new URLSearchParams()),
+    () => OAuthDecoder.analyzeTokenRequest({ type: 'formData', data: { client_id: ['x'] } }, new URLSearchParams()),
+    () => OAuthDecoder.analyzeTokenRequest({ type: 'formData', data: { grant_type: ['authorization_code'], code: ['c'], redirect_uri: ['urn:ietf:wg:oauth:2.0:oob'] } }, new URLSearchParams()),
+    () => OAuthDecoder.analyzeTokenRequest({ type: 'formData', data: { grant_type: ['client_credentials'], client_secret: ['s'] } }, new URLSearchParams()),
+    () => OAuthDecoder.analyzeTokenRequest({ type: 'formData', data: { grant_type: ['password'], username: ['u'], password: ['p'], client_secret: ['s'] } }, new URLSearchParams())
+  ];
+
+  it.each(analyses.map((fn, i) => [i, fn]))('analysis #%i emits only known, non-empty rule ids', (_i, fn) => {
+    const result = fn();
+    expect(result.warnings.length).toBeGreaterThan(0);
+    for (const w of result.warnings) {
+      expect(typeof w.rule).toBe('string');
+      expect(KNOWN_RULES.has(w.rule)).toBe(true);
+      expect(['error', 'warning', 'info']).toContain(w.severity);
+      expect(typeof w.message).toBe('string');
+    }
+  });
+});
+
+// ─── client_assertion decoding ────────────────────────────────────────────────
+
+describe('OAuthDecoder.analyzeClientAssertion', () => {
+  const now = Math.floor(Date.now() / 1000);
+
+  it('decodes header and payload fields of a private_key_jwt assertion', () => {
+    const jwt = buildJwt(
+      { iss: 'app-id', sub: 'app-id', aud: 'https://login.microsoftonline.com/t/oauth2/v2.0/token', exp: now + 300, jti: 'nonce-1' },
+      { alg: 'RS256', typ: 'JWT', kid: 'key-1', 'x5t#S256': 'thumb-sha256' }
+    );
+    const result = OAuthDecoder.analyzeClientAssertion(jwt, 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer');
+    expect(result.isJWT).toBe(true);
+    expect(result.algorithm).toBe('RS256');
+    expect(result.keyId).toBe('key-1');
+    expect(result.thumbprint).toBe('thumb-sha256');
+    expect(result.issuer).toBe('app-id');
+    expect(result.subject).toBe('app-id');
+    expect(result.audience).toBe('https://login.microsoftonline.com/t/oauth2/v2.0/token');
+    expect(result.jwtId).toBe('nonce-1');
+    expect(result.expiry).toBe(new Date((now + 300) * 1000).toISOString());
+    expect(result.isExpired).toBe(false);
+  });
+
+  it('falls back to the x5t thumbprint when x5t#S256 is absent', () => {
+    const jwt = buildJwt({ iss: 'a', exp: now + 60 }, { alg: 'RS256', x5t: 'thumb-sha1' });
+    expect(OAuthDecoder.analyzeClientAssertion(jwt).thumbprint).toBe('thumb-sha1');
+  });
+
+  it('flags an expired assertion', () => {
+    const jwt = buildJwt({ iss: 'a', exp: now - 60 });
+    expect(OAuthDecoder.analyzeClientAssertion(jwt).isExpired).toBe(true);
+  });
+
+  it('defaults the assertion type to jwt-bearer', () => {
+    const jwt = buildJwt({ iss: 'a' });
+    expect(OAuthDecoder.analyzeClientAssertion(jwt).assertionType).toBe('urn:ietf:params:oauth:client-assertion-type:jwt-bearer');
+  });
+
+  it('returns an error object for a value that is not a three-part JWT', () => {
+    expect(OAuthDecoder.analyzeClientAssertion('only.two')).toEqual({ error: 'Not a valid JWT format' });
+    expect(OAuthDecoder.analyzeClientAssertion(null)).toEqual({ error: 'Not a valid JWT format' });
   });
 });

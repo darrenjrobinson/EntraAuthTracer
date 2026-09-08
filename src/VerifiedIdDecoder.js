@@ -108,6 +108,19 @@ class VerifiedIdDecoder {
       result.callbackState = body.callback?.state || null;
     }
 
+    // ─── Verified ID callback payload (service → relying party) ───────────
+    // { requestId, requestStatus: request_retrieved | issuance_successful |
+    //   presentation_verified | ..., state, subject, verifiedCredentialsData }
+    if (typeof body.requestStatus === 'string') result.requestStatus = body.requestStatus;
+    if (typeof body.state === 'string' && !result.callbackState) result.callbackState = body.state;
+    if (typeof body.requestId === 'string' && !result.requestId) result.requestId = body.requestId;
+    if (body.subject) result.subject = String(body.subject);
+    if (Array.isArray(body.verifiedCredentialsData)) {
+      result.verifiedCredentialTypes = body.verifiedCredentialsData
+        .map(c => (Array.isArray(c.type) ? c.type.join(', ') : c.type))
+        .filter(Boolean);
+    }
+
     // ─── OpenID4VP (vp_token / presentation_definition) ───────────────────
     if (body.presentation_definition) {
       result.presentationDefinition = true;
@@ -134,18 +147,21 @@ class VerifiedIdDecoder {
   static addWarnings(result) {
     if (result.pinRequired) {
       result.warnings.push({
+        rule: 'vid_pin_required',
         severity: 'info',
         message: 'PIN required for credential issuance — user will be prompted for a PIN',
       });
     }
     if (result.includeQRCode === true) {
       result.warnings.push({
+        rule: 'vid_qr_code',
         severity: 'info',
         message: 'QR code requested — issuance will display a QR code for wallet scanning',
       });
     }
     if (result.callbackUrl && /localhost|127\.0\.0\.1/i.test(result.callbackUrl)) {
       result.warnings.push({
+        rule: 'vid_callback_localhost',
         severity: 'warning',
         message: `Callback URL points to localhost (${result.callbackUrl}) — not suitable for production`,
       });

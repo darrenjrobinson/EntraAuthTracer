@@ -369,6 +369,7 @@ class SAMLTrace {
       case 'authcode_token_exchange':
       case 'client_credentials':
       case 'refresh_token':
+      case 'ropc':
       case 'oauth_authorize':
       case 'oauth_token':
         this.handleOAuthRequest(requestData);
