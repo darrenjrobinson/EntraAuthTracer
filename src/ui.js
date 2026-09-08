@@ -856,7 +856,7 @@ class EntraAuthTracerUI {
 
     // ── Security warnings ────────────────────────────────────────────────
     if (analysis.warnings && analysis.warnings.length > 0) {
-      html += this.renderOAuthWarnings(analysis.warnings);
+      html += this.renderWarnings(analysis.warnings);
     }
 
     return html;
@@ -950,19 +950,19 @@ class EntraAuthTracerUI {
   }
 
   /**
-   * Render OAuth security warnings.
+   * Render a list of { rule, severity, message } warnings (OAuth, SAML, JWT, Verified ID).
    */
-  renderOAuthWarnings(warnings) {
+  renderWarnings(warnings, title = 'Security Assessment') {
     const e = (v) => this.escapeHtml(v == null ? '' : String(v));
     const items = warnings.map(w => `
-      <div class="oauth-warning oauth-warning-${w.severity}">
+      <div class="oauth-warning oauth-warning-${e(w.severity)}" ${w.rule ? `data-rule="${e(w.rule)}"` : ''}>
         <span class="oauth-warning-icon">${w.severity === 'error' ? '🔴' : w.severity === 'warning' ? '🟡' : '🔵'}</span>
         <span class="oauth-warning-text">${e(w.message)}</span>
       </div>
     `).join('');
     return `
       <div class="oauth-section">
-        <h5>🛡 Security Assessment</h5>
+        <h5>🛡 ${e(title)}</h5>
         ${items}
       </div>
     `;
@@ -1093,12 +1093,7 @@ class EntraAuthTracerUI {
 
     // Warnings
     if (analysis.warnings && analysis.warnings.length) {
-      const items = analysis.warnings.map(w => `
-        <div class="oauth-warning oauth-warning-${e(w.severity)}">
-          <span class="oauth-warning-icon">${w.severity === 'error' ? '🔴' : w.severity === 'warning' ? '🟡' : '🔵'}</span>
-          <span class="oauth-warning-text">${e(w.message)}</span>
-        </div>`).join('');
-      html += `<div class="oauth-section"><h5>🛡 Notes</h5>${items}</div>`;
+      html += this.renderWarnings(analysis.warnings, 'Notes');
     }
 
     return html;
@@ -1558,6 +1553,11 @@ class EntraAuthTracerUI {
       </div>`;
     }
 
+    // Security assessment (signatures, status, validity window, audience)
+    if (decoded.warnings && decoded.warnings.length > 0) {
+      html += this.renderWarnings(decoded.warnings);
+    }
+
     // Raw XML (collapsible)
     html += `<details class="saml-xml-details">
       <summary>Raw XML (${e(decoded.binding)} binding)</summary>
@@ -1726,7 +1726,7 @@ class EntraAuthTracerUI {
 
     // Warnings
     if (decoded.warnings && decoded.warnings.length > 0) {
-      html += this.renderOAuthWarnings(decoded.warnings);
+      html += this.renderWarnings(decoded.warnings);
     }
 
     // Claims table

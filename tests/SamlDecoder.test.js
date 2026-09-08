@@ -356,5 +356,174 @@ describe('SamlDecoder', () => {
       expect(result).not.toBeNull();
       expect(result.error).toBeDefined();
     });
+
+    it('should attach the security assessment to the pipeline result', async () => {
+      const request = {
+        url: 'https://sp.example.com/acs',
+        requestBody: { type: 'formData', data: { SAMLResponse: [b64Encode(RESPONSE_XML)] } }
+      };
+      const result = await SamlDecoder.decodeSamlFromRequest(request);
+      expect(Array.isArray(result.warnings)).toBe(true);
+      expect(result.warnings.map(w => w.rule)).toContain('saml_unsigned');
+    });
+  });
+
+  // ─── Signature / encryption detection ────────────────────────────────────
+
+  const SIGNATURE = '<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:SignedInfo/><ds:SignatureValue>abc</ds:SignatureValue></ds:Signature>';
+
+  describe('parse — signature and encryption flags', () => {
+    it('reports unsigned messages and assertions', () => {
+      const parsed = SamlDecoder.parse(RESPONSE_XML);
+      expect(parsed.messageSigned).toBe(false);
+      expect(parsed.assertion.signed).toBe(false);
+      expect(parsed.hasEncryptedAssertion).toBe(false);
+    });
+
+    it('detects a message-level signature directly under the root', () => {
+      const xml = RESPONSE_XML.replace('<samlp:Status>', SIGNATURE + '<samlp:Status>');
+      const parsed = SamlDecoder.parse(xml);
+      expect(parsed.messageSigned).toBe(true);
+      expect(parsed.assertion.signed).toBe(false);
+    });
+
+    it('detects an assertion-level signature without mistaking it for a message signature', () => {
+      const xml = RESPONSE_XML.replace('<saml:Subject>', SIGNATURE + '<saml:Subject>');
+      const parsed = SamlDecoder.parse(xml);
+      expect(parsed.messageSigned).toBe(false);
+      expect(parsed.assertion.signed).toBe(true);
+    });
+
+    it('detects an EncryptedAssertion', () => {
+      const xml = RESPONSE_XML
+        .replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, '<saml:EncryptedAssertion><xenc:EncryptedData xmlns:xenc="http://www.w3.org/2001/04/xmlenc#"/></saml:EncryptedAssertion>');
+      const parsed = SamlDecoder.parse(xml);
+      expect(parsed.hasEncryptedAssertion).toBe(true);
+      expect(parsed.assertion).toBeNull();
+    });
+  });
+
+  // ─── Security assessment ─────────────────────────────────────────────────
+
+  describe('generateWarnings', () => {
+    const IN_WINDOW = Date.parse('2024-01-01T00:30:00Z'); // inside the fixture's validity window
+    const rules = (xml, now) => SamlDecoder.generateWarnings(SamlDecoder.parse(xml), now).map(w => w.rule);
+    const find = (xml, rule, now) => SamlDecoder.generateWarnings(SamlDecoder.parse(xml), now).find(w => w.rule === rule);
+
+    it('flags an unsigned AuthnRequest with an info note and nothing else for the fixture', () => {
+      expect(rules(AUTHN_REQUEST_XML)).toEqual(['saml_request_unsigned']);
+      expect(find(AUTHN_REQUEST_XML, 'saml_request_unsigned').severity).toBe('info');
+    });
+
+    it('notes an AuthnRequest without Destination', () => {
+      const xml = AUTHN_REQUEST_XML.replace('Destination="https://idp.example.com/sso"', '');
+      expect(rules(xml)).toContain('saml_request_no_destination');
+    });
+
+    it('notes an unspecified NameIDPolicy format', () => {
+      const xml = AUTHN_REQUEST_XML.replace('nameid-format:persistent', 'nameid-format:unspecified');
+      expect(rules(xml)).toContain('saml_nameid_policy_unspecified');
+      expect(rules(AUTHN_REQUEST_XML)).not.toContain('saml_nameid_policy_unspecified');
+    });
+
+    it('is silent for a signed AuthnRequest with a Destination and a persistent NameID policy', () => {
+      const xml = AUTHN_REQUEST_XML.replace('<saml:Issuer>', SIGNATURE + '<saml:Issuer>');
+      expect(rules(xml)).toEqual([]);
+    });
+
+    it('flags a Response whose assertion has expired (using the real clock)', () => {
+      const w = find(RESPONSE_XML, 'saml_assertion_expired');
+      expect(w).toBeDefined();
+      expect(w.severity).toBe('warning');
+      expect(w.message).toContain('2024-01-01T01:00:00Z');
+    });
+
+    it('does not flag expiry when evaluated inside the validity window', () => {
+      expect(rules(RESPONSE_XML, IN_WINDOW)).not.toContain('saml_assertion_expired');
+      expect(rules(RESPONSE_XML, IN_WINDOW)).not.toContain('saml_assertion_not_yet_valid');
+    });
+
+    it('flags an assertion that is not yet valid', () => {
+      expect(rules(RESPONSE_XML, Date.parse('2023-12-31T00:00:00Z'))).toContain('saml_assertion_not_yet_valid');
+    });
+
+    it('flags a Response with neither message nor assertion signature', () => {
+      const w = find(RESPONSE_XML, 'saml_unsigned', IN_WINDOW);
+      expect(w).toBeDefined();
+      expect(w.severity).toBe('warning');
+    });
+
+    it('accepts a signature on either the Response or the Assertion', () => {
+      const msgSigned = RESPONSE_XML.replace('<samlp:Status>', SIGNATURE + '<samlp:Status>');
+      const assertionSigned = RESPONSE_XML.replace('<saml:Subject>', SIGNATURE + '<saml:Subject>');
+      expect(rules(msgSigned, IN_WINDOW)).not.toContain('saml_unsigned');
+      expect(rules(assertionSigned, IN_WINDOW)).not.toContain('saml_unsigned');
+    });
+
+    it('reports a non-success status as an error including the status message', () => {
+      const xml = RESPONSE_XML
+        .replace('urn:oasis:names:tc:SAML:2.0:status:Success', 'urn:oasis:names:tc:SAML:2.0:status:Requester')
+        .replace('</samlp:StatusCode>', '')
+        .replace('<samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Requester"/>',
+          '<samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Requester"/><samlp:StatusMessage>Invalid request</samlp:StatusMessage>');
+      const w = find(xml, 'saml_status_failure', IN_WINDOW);
+      expect(w).toBeDefined();
+      expect(w.severity).toBe('error');
+      expect(w.message).toContain('Requester');
+      expect(w.message).toContain('Invalid request');
+    });
+
+    it('notes an encrypted assertion instead of complaining about a missing one', () => {
+      const xml = RESPONSE_XML
+        .replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, '<saml:EncryptedAssertion><xenc:EncryptedData xmlns:xenc="http://www.w3.org/2001/04/xmlenc#"/></saml:EncryptedAssertion>');
+      const r = rules(xml, IN_WINDOW);
+      expect(r).toContain('saml_assertion_encrypted');
+      expect(r).not.toContain('saml_no_assertion');
+      expect(r).not.toContain('saml_unsigned');
+    });
+
+    it('warns when a successful Response carries no assertion at all', () => {
+      const xml = RESPONSE_XML.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, '');
+      expect(rules(xml, IN_WINDOW)).toContain('saml_no_assertion');
+    });
+
+    it('warns when the assertion lacks an AudienceRestriction', () => {
+      const xml = RESPONSE_XML.replace(/<saml:AudienceRestriction>[\s\S]*<\/saml:AudienceRestriction>/, '');
+      expect(rules(xml, IN_WINDOW)).toContain('saml_no_audience_restriction');
+      expect(rules(RESPONSE_XML, IN_WINDOW)).not.toContain('saml_no_audience_restriction');
+    });
+
+    it('notes an unusually long assertion validity window', () => {
+      const xml = RESPONSE_XML.replace('NotOnOrAfter="2024-01-01T01:00:00Z"', 'NotOnOrAfter="2024-01-01T09:00:00Z"');
+      const w = find(xml, 'saml_assertion_long_lifetime', IN_WINDOW);
+      expect(w).toBeDefined();
+      expect(w.message).toContain('540 minutes');
+      expect(rules(RESPONSE_XML, IN_WINDOW)).not.toContain('saml_assertion_long_lifetime');
+    });
+
+    it('flags a failed LogoutResponse and is silent for a successful one', () => {
+      expect(rules(LOGOUT_RESPONSE_XML)).toEqual([]);
+      const failed = LOGOUT_RESPONSE_XML.replace('status:Success', 'status:Responder');
+      expect(rules(failed)).toEqual(['saml_status_failure']);
+    });
+
+    it('returns no warnings for parse errors, LogoutRequests and null input', () => {
+      expect(SamlDecoder.generateWarnings(SamlDecoder.parse('<not-xml'))).toEqual([]);
+      expect(rules(LOGOUT_REQUEST_XML)).toEqual([]);
+      expect(SamlDecoder.generateWarnings(null)).toEqual([]);
+    });
+
+    it('gives every warning a rule, a severity and a message', () => {
+      const xml = RESPONSE_XML
+        .replace('status:Success', 'status:Requester')
+        .replace(/<saml:AudienceRestriction>[\s\S]*<\/saml:AudienceRestriction>/, '');
+      const warnings = SamlDecoder.generateWarnings(SamlDecoder.parse(xml));
+      expect(warnings.length).toBeGreaterThanOrEqual(3);
+      for (const w of warnings) {
+        expect(w.rule).toMatch(/^saml_/);
+        expect(['error', 'warning', 'info']).toContain(w.severity);
+        expect(typeof w.message).toBe('string');
+      }
+    });
   });
 });
