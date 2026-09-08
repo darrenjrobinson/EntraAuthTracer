@@ -9,11 +9,15 @@ import SamlDecoder from './SamlDecoder.js';
 import FlowCorrelator from './FlowCorrelator.js';
 import Sanitize from './Sanitize.js';
 import Exporters from './Exporters.js';
+import WebMcpStatusText from './webmcp/WebMcpStatusText.js';
+import { ACTIONS as WEBMCP_ACTIONS } from './webmcp/protocol.js';
 
 class EntraAuthTracerUI {
   constructor() {
     this.currentRequests = [];
     this.selectedRequest = null;
+    this.webmcpStatus = null;          // last controller.status() seen
+    this.webmcpDismissedError = null;  // error text the user dismissed
     this.viewMode = 'timeline'; // 'list' | 'timeline'
     this.filters = {
       search: '',
@@ -137,6 +141,16 @@ class EntraAuthTracerUI {
       popoutBtn.addEventListener('click', () => this.popout());
     }
 
+    // WebMCP mode toggle + banner action
+    const webmcpBtn = document.getElementById('webmcpBtn');
+    if (webmcpBtn) {
+      webmcpBtn.addEventListener('click', () => this.toggleWebMcp());
+    }
+    const webmcpBannerAction = document.getElementById('webmcpBannerAction');
+    if (webmcpBannerAction) {
+      webmcpBannerAction.addEventListener('click', () => this.onWebMcpBannerAction());
+    }
+
     // Control buttons
     document.getElementById('clearBtn').addEventListener('click', () => {
       this.clearData();
@@ -185,9 +199,74 @@ class EntraAuthTracerUI {
         // so the user's current filter/search state is respected on every poll.
         this.filterAndRender();
         this.updateStatusBar();
+        if (response.webmcp) this.updateWebMcpUi(response.webmcp);
       }
     } catch (error) {
       console.error('Failed to load data:', error);
+    }
+  }
+
+  // ─── WebMCP mode ─────────────────────────────────────────────────────────────
+
+  /**
+   * Send a WebMCP action to the background and resolve with its response.
+   */
+  sendWebMcp(action) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action }, resolve);
+    });
+  }
+
+  /**
+   * Enable or disable WebMCP mode depending on the current status.
+   */
+  async toggleWebMcp() {
+    const armed = !!(this.webmcpStatus && this.webmcpStatus.armed);
+    this.webmcpDismissedError = null;
+    const response = await this.sendWebMcp(armed ? WEBMCP_ACTIONS.DISABLE : WEBMCP_ACTIONS.ENABLE);
+    if (response && response.status) this.updateWebMcpUi(response.status);
+  }
+
+  /**
+   * Banner button: Disable while armed, Dismiss for an error notice.
+   */
+  onWebMcpBannerAction() {
+    const view = WebMcpStatusText.describeStatus(this.webmcpStatus, { dismissedError: this.webmcpDismissedError });
+    if (view.banner && view.banner.action === 'disable') {
+      this.toggleWebMcp();
+    } else if (this.webmcpStatus) {
+      this.webmcpDismissedError = this.webmcpStatus.lastError || null;
+      this.updateWebMcpUi(this.webmcpStatus);
+    }
+  }
+
+  /**
+   * Reflect the controller status in the toggle button and the trust banner.
+   */
+  updateWebMcpUi(status) {
+    this.webmcpStatus = status;
+    const btn = document.getElementById('webmcpBtn');
+    if (!btn) return;
+    const view = WebMcpStatusText.describeStatus(status, { dismissedError: this.webmcpDismissedError });
+
+    btn.textContent = view.buttonLabel;
+    btn.title = view.title;
+    btn.disabled = view.disabled;
+    btn.setAttribute('aria-pressed', String(view.pressed));
+    btn.classList.toggle('webmcp-active', view.active);
+
+    const banner = document.getElementById('webmcpBanner');
+    const text = document.getElementById('webmcpBannerText');
+    const action = document.getElementById('webmcpBannerAction');
+    if (!banner || !text || !action) return;
+    if (view.banner) {
+      banner.hidden = false;
+      banner.classList.toggle('webmcp-banner--active', view.banner.kind === 'active');
+      banner.classList.toggle('webmcp-banner--warn', view.banner.kind === 'warn');
+      text.textContent = view.banner.text;
+      action.textContent = view.banner.actionLabel;
+    } else {
+      banner.hidden = true;
     }
   }
 
