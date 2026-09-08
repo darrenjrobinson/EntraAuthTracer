@@ -7,6 +7,7 @@ import EntraClaimsDecoder from './EntraClaimsDecoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 import SamlDecoder from './SamlDecoder.js';
 import FlowCorrelator from './FlowCorrelator.js';
+import Sanitize from './Sanitize.js';
 
 class EntraAuthTracerUI {
   constructor() {
@@ -895,7 +896,8 @@ class EntraAuthTracerUI {
         items.push(this.renderRequestItem(req));
       } catch (err) {
         console.error('renderRequestItem failed:', err, req);
-        items.push(`<div class="request-item error-item" title="${err.message}">&#9888; Error rendering request: ${(req && req.url) ? req.url.substring(0, 80) : '(unknown)'}</div>`);
+        const shortUrl = (req && req.url) ? req.url.substring(0, 80) : '(unknown)';
+        items.push(`<div class="request-item error-item" title="${this.escapeHtml(err.message)}">&#9888; Error rendering request: ${this.escapeHtml(shortUrl)}</div>`);
       }
     }
     container.innerHTML = items.join('');
@@ -1083,8 +1085,8 @@ class EntraAuthTracerUI {
    * Check for CAE capability in request by attempting to decode an available JWT.
    */
   checkForCAE(request) {
-    const jwt = this.extractJwtFromRequest(request) ||
-                this.extractJwtFromRequest(request, 'id_token_hint');
+    const jwt = Sanitize.extractJwtFromRequest(request) ||
+                Sanitize.extractJwtFromRequest(request, 'id_token_hint');
     if (!jwt) return false;
     try {
       const decoded = EntraClaimsDecoder.decodeEntraToken(jwt);
@@ -1406,11 +1408,11 @@ class EntraAuthTracerUI {
     if (request.fido2Analysis && !request.fido2Analysis.error) {
       fido2Section.style.display = 'block';
       fido2Details.innerHTML = this.renderFido2Details(request.fido2Analysis, request.flowType);
-    } else if (request.flowType.startsWith('fido2_')) {
+    } else if ((request.flowType || '').startsWith('fido2_')) {
       fido2Section.style.display = 'block';
-      fido2Details.innerHTML = request.fido2Analysis?.error ? 
-        `<div class="error">FIDO2 Error: ${request.fido2Analysis.error}</div>` :
-        '<div>No FIDO2 data available for this request</div>';
+      fido2Details.innerHTML = request.fido2Analysis?.error
+        ? `<div class="error">FIDO2 Error: ${this.escapeHtml(request.fido2Analysis.error)}</div>`
+        : '<div>No FIDO2 data available for this request</div>';
     } else {
       fido2Section.style.display = 'none';
     }
@@ -1553,11 +1555,11 @@ class EntraAuthTracerUI {
           <h5>📋 Client Data JSON</h5>
           <div class="details-grid">
             <div class="label">Operation Type:</div>
-            <div class="value">${clientData.type}</div>
+            <div class="value">${this.escapeHtml(clientData.type)}</div>
             <div class="label">Origin:</div>
-            <div class="value">${clientData.origin}</div>
+            <div class="value">${this.escapeHtml(clientData.origin)}</div>
             <div class="label">Challenge:</div>
-            <div class="value" title="${clientData.challenge}">${clientData.challenge.substring(0, 40)}...</div>
+            <div class="value" title="${this.escapeHtml(clientData.challenge)}">${this.escapeHtml(String(clientData.challenge || '').substring(0, 40))}...</div>
             <div class="label">Cross Origin:</div>
             <div class="value">${clientData.crossOrigin ? 'Yes' : 'No'}</div>
           </div>
@@ -1575,9 +1577,9 @@ class EntraAuthTracerUI {
           <h5>🔐 Authenticator Data</h5>
           <div class="details-grid">
             <div class="label">RP ID Hash:</div>
-            <div class="value" title="${authData.rpIdHash}">${authData.rpIdHash.substring(0, 40)}...</div>
+            <div class="value" title="${this.escapeHtml(authData.rpIdHash)}">${this.escapeHtml(String(authData.rpIdHash || '').substring(0, 40))}...</div>
             <div class="label">Signature Counter:</div>
-            <div class="value">${authData.signCount}</div>
+            <div class="value">${this.escapeHtml(authData.signCount)}</div>
           </div>
           
           <h6>Authenticator Flags:</h6>
@@ -1670,21 +1672,21 @@ class EntraAuthTracerUI {
     if (!publicKeyData || publicKeyData.error) {
       return `
         <h6>Public Key:</h6>
-        <div class="error">${publicKeyData?.error || 'No public key data'}</div>
+        <div class="error">${this.escapeHtml(publicKeyData?.error || 'No public key data')}</div>
       `;
     }
 
     let html = '<h6>🔑 Credential Public Key:</h6>';
-    
+
     if (publicKeyData.keyInfo && !publicKeyData.keyInfo.error) {
       const keyInfo = publicKeyData.keyInfo;
-      
+
       html += `
         <div class="details-grid">
           <div class="label">Key Type:</div>
-          <div class="value">${keyInfo.keyTypeDescription}</div>
+          <div class="value">${this.escapeHtml(keyInfo.keyTypeDescription)}</div>
           <div class="label">Algorithm:</div>
-          <div class="value">${keyInfo.algorithmDescription}</div>
+          <div class="value">${this.escapeHtml(keyInfo.algorithmDescription)}</div>
         </div>
       `;
 
@@ -1693,7 +1695,7 @@ class EntraAuthTracerUI {
         html += `
           <div class="details-grid">
             <div class="label">Curve:</div>
-            <div class="value">${keyInfo.parameters.curveDescription}</div>
+            <div class="value">${this.escapeHtml(keyInfo.parameters.curveDescription)}</div>
             <div class="label">Coordinates:</div>
             <div class="value">x: ${keyInfo.parameters.x ? 'Present' : 'Missing'}, y: ${keyInfo.parameters.y ? 'Present' : 'Missing'}</div>
           </div>
@@ -1712,14 +1714,14 @@ class EntraAuthTracerUI {
         `;
       }
     } else {
-      html += `<div class="error">${publicKeyData.keyInfo?.error || 'Unable to parse key information'}</div>`;
+      html += `<div class="error">${this.escapeHtml(publicKeyData.keyInfo?.error || 'Unable to parse key information')}</div>`;
     }
 
     // CBOR raw data (collapsible)
     html += `
       <details class="cbor-details">
-        <summary>Raw CBOR Data (${publicKeyData.size} bytes)</summary>
-        <pre class="cbor-hex">${publicKeyData.hex}</pre>
+        <summary>Raw CBOR Data (${this.escapeHtml(publicKeyData.size)} bytes)</summary>
+        <pre class="cbor-hex">${this.escapeHtml(publicKeyData.hex)}</pre>
       </details>
     `;
 
@@ -1751,14 +1753,14 @@ class EntraAuthTracerUI {
     const params = Array.from(url.searchParams.entries());
 
     const urlParamsCopyText = params.length > 0
-      ? params.map(([k, v]) => `${k}: ${this.redactSensitiveValues(k, v)}`).join('\n')
+      ? params.map(([k, v]) => `${k}: ${Sanitize.redactSensitiveValues(k, v)}`).join('\n')
       : 'No URL parameters';
     this.setSectionHeader('urlParamsSectionHeader', 'URL Parameters', urlParamsCopyText);
 
     if (params.length > 0) {
       urlParameters.innerHTML = params.map(([key, value]) => `
         <div class="param-name">${this.escapeHtml(key)}:</div>
-        <div class="param-value">${this.escapeHtml(this.redactSensitiveValues(key, value))}</div>
+        <div class="param-value">${this.escapeHtml(Sanitize.redactSensitiveValues(key, value))}</div>
       `).join('');
     } else {
       urlParameters.innerHTML = '<div class="param-value">No URL parameters</div>';
@@ -1843,41 +1845,35 @@ class EntraAuthTracerUI {
   requestBodyAsText(body) {
     if (body.type === 'formData') {
       return Object.entries(body.data)
-        .map(([k, values]) => `${k}: ${this.redactSensitiveValues(k, values[0])}`)
+        .map(([k, values]) => `${k}: ${Sanitize.redactSensitiveValues(k, Array.isArray(values) ? values[0] : values)}`)
         .join('\n');
     } else if (body.type === 'json') {
-      return JSON.stringify(body.data, null, 2);
+      return JSON.stringify(Sanitize.redactObject(body.data), null, 2);
     }
     return String(body.data);
   }
 
   /**
-   * Render request body
+   * Render request body — every value is redacted and HTML-escaped.
    */
   renderRequestBody(body) {
     if (body.type === 'formData') {
       return Object.entries(body.data).map(([key, values]) => `
-        <div class="param-name">${key}:</div>
-        <div class="param-value">${this.redactSensitiveValues(key, values[0])}</div>
+        <div class="param-name">${this.escapeHtml(key)}:</div>
+        <div class="param-value">${this.escapeHtml(Sanitize.redactSensitiveValues(key, Array.isArray(values) ? values[0] : values))}</div>
       `).join('');
     } else if (body.type === 'json') {
-      return `<div class="param-value"><pre>${JSON.stringify(body.data, null, 2)}</pre></div>`;
+      return `<div class="param-value"><pre>${this.escapeHtml(JSON.stringify(Sanitize.redactObject(body.data), null, 2))}</pre></div>`;
     } else {
-      return `<div class="param-value">${body.data}</div>`;
+      return `<div class="param-value">${this.escapeHtml(body.data)}</div>`;
     }
   }
 
   /**
-   * Escape a value for safe insertion into HTML.
+   * Escape a value for safe insertion into HTML (delegates to Sanitize).
    */
   escapeHtml(text) {
-    if (text == null) return '';
-    return String(text)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    return Sanitize.escapeHtml(text);
   }
 
   /**
@@ -2002,19 +1998,6 @@ class EntraAuthTracerUI {
   }
 
   /**
-   * Redact sensitive values
-   */
-  redactSensitiveValues(key, value) {
-    const sensitiveKeys = ['client_secret', 'password', 'refresh_token'];
-    
-    if (sensitiveKeys.some(k => key.toLowerCase().includes(k))) {
-      return '[REDACTED]';
-    }
-    
-    return String(value).substring(0, 200) + (value.length > 200 ? '...' : '');
-  }
-
-  /**
    * Populate SAML tab — decodes SAMLRequest / SAMLResponse from the captured request.
    */
   async populateSamlTab(request) {
@@ -2120,9 +2103,9 @@ class EntraAuthTracerUI {
     // Attempt to decode any JWT travelling in request parameters:
     // client_assertion (client credentials / auth code), id_token_hint (authorize)
     const jwtSource = (analysis && analysis.clientAssertion && !analysis.clientAssertion.error)
-      ? { jwt: this.extractJwtFromRequest(request), label: 'client_assertion' }
+      ? { jwt: Sanitize.extractJwtFromRequest(request), label: 'client_assertion' }
       : (analysis && analysis.idTokenHint && !analysis.idTokenHint.error)
-        ? { jwt: this.extractJwtFromRequest(request, 'id_token_hint'), label: 'id_token_hint' }
+        ? { jwt: Sanitize.extractJwtFromRequest(request, 'id_token_hint'), label: 'id_token_hint' }
         : null;
 
     if (jwtSource && jwtSource.jwt) {
@@ -2141,24 +2124,6 @@ class EntraAuthTracerUI {
 
     entraClaims.innerHTML = '<div class="empty-state">JWT claims are decoded from <strong>client_assertion</strong> or <strong>id_token_hint</strong> parameters when present in the captured request.</div>';
     this.setSectionHeader('entraClaimsSectionHeader', 'JWT Claims', '');
-  }
-
-  /**
-   * Extract a JWT string from known request parameters.
-   */
-  extractJwtFromRequest(request, paramName = 'client_assertion') {
-    // Check request body (form data)
-    if (request.requestBody && request.requestBody.type === 'formData') {
-      const vals = request.requestBody.data[paramName];
-      if (vals) return Array.isArray(vals) ? vals[0] : vals;
-    }
-    // Check URL params
-    try {
-      const url = new URL(request.url);
-      const val = url.searchParams.get(paramName);
-      if (val) return val;
-    } catch { /* ignore */ }
-    return null;
   }
 
   /**
