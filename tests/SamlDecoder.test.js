@@ -401,6 +401,55 @@ describe('SamlDecoder', () => {
       expect(parsed.hasEncryptedAssertion).toBe(true);
       expect(parsed.assertion).toBeNull();
     });
+
+    it('only recognises Signature elements in the XML Signature namespace', () => {
+      const foreign = RESPONSE_XML.replace('<samlp:Status>', '<Signature xmlns="urn:example:not-dsig"><Value/></Signature><samlp:Status>');
+      expect(SamlDecoder.parse(foreign).messageSigned).toBe(false);
+      const unqualified = RESPONSE_XML.replace('<saml:Subject>', '<Signature><Value/></Signature><saml:Subject>');
+      expect(SamlDecoder.parse(unqualified).assertion.signed).toBe(false);
+      const genuine = RESPONSE_XML.replace('<samlp:Status>', SIGNATURE + '<samlp:Status>');
+      expect(SamlDecoder.parse(genuine).messageSigned).toBe(true);
+    });
+
+    it('treats only the exact SAML Success URI as success', () => {
+      const status = (value) => SamlDecoder.parse(RESPONSE_XML.replace('urn:oasis:names:tc:SAML:2.0:status:Success', value)).status;
+      expect(status('urn:oasis:names:tc:SAML:2.0:status:Success').isSuccess).toBe(true);
+      expect(status('urn:example:NotSuccess').isSuccess).toBe(false);
+      expect(status('urn:oasis:names:tc:SAML:2.0:status:Success ').isSuccess).toBe(false);
+      expect(status('urn:oasis:names:tc:SAML:2.0:status:Requester').isSuccess).toBe(false);
+    });
+  });
+
+  // ─── Redirect-binding signatures (Signature / SigAlg query parameters) ────
+
+  describe('redirect-binding signature handling', () => {
+    const sigAlg = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256';
+    const signedUrl = `https://idp.example.com/sso?SAMLRequest=${deflateBase64url(AUTHN_REQUEST_XML)}&RelayState=rs&SigAlg=${encodeURIComponent(sigAlg)}&Signature=${encodeURIComponent('c2lnbmF0dXJl')}`;
+    const unsignedUrl = `https://idp.example.com/sso?SAMLRequest=${deflateBase64url(AUTHN_REQUEST_XML)}`;
+
+    it('extract() captures the binding signature and algorithm', () => {
+      expect(SamlDecoder.extract({ url: signedUrl, requestBody: null }).bindingSignature).toEqual({ present: true, algorithm: sigAlg });
+      expect(SamlDecoder.extract({ url: unsignedUrl, requestBody: null }).bindingSignature).toBeNull();
+      expect(SamlDecoder.extract({ url: 'https://sp/acs', requestBody: { type: 'formData', data: { SAMLRequest: ['x'] } } }).bindingSignature).toBeUndefined();
+    });
+
+    it('does not report a signed Redirect-binding AuthnRequest as unsigned', async () => {
+      const signed = await SamlDecoder.decodeSamlFromRequest({ url: signedUrl, requestBody: null });
+      expect(signed.parsed.messageType).toBe('AuthnRequest');
+      expect(signed.bindingSignature).toEqual({ present: true, algorithm: sigAlg });
+      expect(signed.warnings.map(w => w.rule)).not.toContain('saml_request_unsigned');
+
+      const unsigned = await SamlDecoder.decodeSamlFromRequest({ url: unsignedUrl, requestBody: null });
+      expect(unsigned.bindingSignature).toBeNull();
+      expect(unsigned.warnings.map(w => w.rule)).toContain('saml_request_unsigned');
+    });
+
+    it('generateWarnings honours a binding signature for Responses too', () => {
+      const parsed = SamlDecoder.parse(RESPONSE_XML);
+      const inWindow = Date.parse('2024-01-01T00:30:00Z');
+      expect(SamlDecoder.generateWarnings(parsed, inWindow).map(w => w.rule)).toContain('saml_unsigned');
+      expect(SamlDecoder.generateWarnings(parsed, inWindow, { bindingSignature: { present: true, algorithm: sigAlg } }).map(w => w.rule)).not.toContain('saml_unsigned');
+    });
   });
 
   // ─── Security assessment ─────────────────────────────────────────────────
@@ -458,6 +507,13 @@ describe('SamlDecoder', () => {
       const assertionSigned = RESPONSE_XML.replace('<saml:Subject>', SIGNATURE + '<saml:Subject>');
       expect(rules(msgSigned, IN_WINDOW)).not.toContain('saml_unsigned');
       expect(rules(assertionSigned, IN_WINDOW)).not.toContain('saml_unsigned');
+    });
+
+    it('flags a malformed status value that merely contains the word Success', () => {
+      const xml = RESPONSE_XML.replace('urn:oasis:names:tc:SAML:2.0:status:Success', 'urn:example:NotSuccess');
+      const w = find(xml, 'saml_status_failure', IN_WINDOW);
+      expect(w).toBeDefined();
+      expect(w.message).toContain('NotSuccess');
     });
 
     it('reports a non-success status as an error including the status message', () => {
