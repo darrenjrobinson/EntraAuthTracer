@@ -28,7 +28,39 @@ global.chrome = {
     setBadgeBackgroundColor: jest.fn()
   },
   windows: {
-    create: jest.fn()
+    create: jest.fn(),
+    get: jest.fn(async () => ({ id: 1, type: 'normal' })),
+    getLastFocused: jest.fn(async () => ({ id: 1, type: 'normal' }))
+  },
+  tabs: {
+    query: jest.fn(async () => []),
+    get: jest.fn(async () => null),
+    sendMessage: jest.fn(async () => ({ ok: true })),
+    onUpdated: { addListener: jest.fn(), removeListener: jest.fn() },
+    onRemoved: { addListener: jest.fn(), removeListener: jest.fn() },
+    onReplaced: { addListener: jest.fn(), removeListener: jest.fn() }
+  },
+  scripting: {
+    executeScript: jest.fn(async () => [])
+  },
+  storage: {
+    // In-memory chrome.storage.session fake (promise-based, MV3 style)
+    session: (() => {
+      const store = {};
+      return {
+        _store: store,
+        get: jest.fn(async (key) => {
+          if (key == null) return { ...store };
+          const keys = Array.isArray(key) ? key : [key];
+          const out = {};
+          for (const k of keys) if (k in store) out[k] = store[k];
+          return out;
+        }),
+        set: jest.fn(async (obj) => { Object.assign(store, obj); }),
+        remove: jest.fn(async (key) => { for (const k of (Array.isArray(key) ? key : [key])) delete store[k]; }),
+        clear: jest.fn(async () => { for (const k of Object.keys(store)) delete store[k]; })
+      };
+    })()
   },
   webRequest: {
     onBeforeRequest: {
