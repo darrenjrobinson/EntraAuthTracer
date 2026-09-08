@@ -10,8 +10,9 @@
 // module-level listener registration harmless. Every test gets a fresh state
 // object (see beforeEach below) so suites cannot leak state into each other.
 
-import samltrace, { MAX_REQUESTS, MAX_FIDO2_SESSIONS } from '../src/SAMLTrace.js';
+import samltrace, { MAX_REQUESTS, MAX_FIDO2_SESSIONS, DEVICE_CODE_JOIN_WINDOW_MS } from '../src/SAMLTrace.js';
 import Fido2Decoder from '../src/Fido2Decoder.js';
+import FlowCorrelator from '../src/FlowCorrelator.js';
 import { makeState, makeDetails, captureWebRequestListeners } from './helpers.js';
 
 // ─── Test suites ─────────────────────────────────────────────────────────────
@@ -1129,6 +1130,79 @@ describe('SAMLTrace', () => {
   describe('generateRequestId format', () => {
     it('produces req_<timestamp>_<base36> identifiers', () => {
       expect(samltrace.generateRequestId()).toMatch(/^req_\d{13}_[a-z0-9]{1,9}$/);
+    });
+  });
+
+  // ─── Device code correlation: initiation ↔ polls ─────────────────────────
+
+  describe('device code correlation between initiation and polls', () => {
+    const dcUrl = 'https://login.microsoftonline.com/t/oauth2/v2.0/devicecode';
+    const tokenUrl = 'https://login.microsoftonline.com/t/oauth2/v2.0/token';
+    const initiation = (clientId) => makeDetails(dcUrl, 'POST', { requestBody: { formData: { client_id: [clientId], scope: ['openid'] } } });
+    const poll = (clientId, deviceCode) => makeDetails(tokenUrl, 'POST', {
+      requestBody: { formData: { grant_type: ['urn:ietf:params:oauth:grant-type:device_code'], device_code: [deviceCode], client_id: [clientId] } }
+    });
+
+    it('joins polls to the initiation of the same client and yields one timeline group', () => {
+      samltrace.handleBeforeRequest(initiation('cli-app'));
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-1'));
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-1'));
+      const [init, p1, p2] = samltrace.state.requests;
+      expect(init.flowType).toBe('device_code_initiation');
+      expect(init.deviceCodeCorrelationKey).toMatch(/^init:cli-app:/);
+      expect(p1.flowType).toBe('device_code_poll');
+      expect(p1.deviceCodeCorrelationKey).toBe(init.deviceCodeCorrelationKey);
+      expect(p2.deviceCodeCorrelationKey).toBe(init.deviceCodeCorrelationKey);
+      expect(samltrace.state.deviceCodeCorrelation.get(init.deviceCodeCorrelationKey)).toEqual([init.id, p1.id, p2.id]);
+
+      const groups = FlowCorrelator.computeFlowGroups(samltrace.state.requests);
+      expect(groups).toHaveLength(1);
+      expect(groups[0].type).toBe('device_code');
+      expect(groups[0].requests.map(r => r.id)).toEqual([init.id, p1.id, p2.id]);
+      expect(groups[0].requests.map((r, i) => FlowCorrelator.getFlowStepDesc(r, i))).toEqual(['Initiation', 'Poll #1', 'Poll #2']);
+    });
+
+    it('does not join a poll to another client\'s initiation', () => {
+      samltrace.handleBeforeRequest(initiation('cli-a'));
+      samltrace.handleBeforeRequest(poll('cli-b', 'DC-2'));
+      const [init, p] = samltrace.state.requests;
+      expect(p.deviceCodeCorrelationKey).toBe('poll:DC-2');
+      expect(p.deviceCodeCorrelationKey).not.toBe(init.deviceCodeCorrelationKey);
+      expect(FlowCorrelator.computeFlowGroups(samltrace.state.requests)).toHaveLength(2);
+    });
+
+    it('does not join a second device code to an initiation already joined by the first', () => {
+      samltrace.handleBeforeRequest(initiation('cli-app'));
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-1'));
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-2'));
+      const [init, p1, p2] = samltrace.state.requests;
+      expect(p1.deviceCodeCorrelationKey).toBe(init.deviceCodeCorrelationKey);
+      expect(p2.deviceCodeCorrelationKey).toBe('poll:DC-2');
+    });
+
+    it('prefers the most recent eligible initiation and ignores ones outside the join window', () => {
+      samltrace.handleBeforeRequest(initiation('cli-app'));
+      samltrace.state.requests[0].timestamp -= DEVICE_CODE_JOIN_WINDOW_MS + 1000;
+      samltrace.handleBeforeRequest(initiation('cli-app'));
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-1'));
+      const [oldInit, newInit, p] = samltrace.state.requests;
+      expect(p.deviceCodeCorrelationKey).toBe(newInit.deviceCodeCorrelationKey);
+      expect(p.deviceCodeCorrelationKey).not.toBe(oldInit.deviceCodeCorrelationKey);
+
+      samltrace.state = makeState();
+      samltrace.handleBeforeRequest(initiation('cli-app'));
+      samltrace.state.requests[0].timestamp -= DEVICE_CODE_JOIN_WINDOW_MS + 1000;
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-9'));
+      expect(samltrace.state.requests[1].deviceCodeCorrelationKey).toBe('poll:DC-9');
+    });
+
+    it('falls back to a standalone poll key when no initiation was captured', () => {
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-1'));
+      samltrace.handleBeforeRequest(poll('cli-app', 'DC-1'));
+      const [p1, p2] = samltrace.state.requests;
+      expect(p1.deviceCodeCorrelationKey).toBe('poll:DC-1');
+      expect(p2.deviceCodeCorrelationKey).toBe('poll:DC-1');
+      expect(samltrace.state.deviceCodeCorrelation.get('poll:DC-1')).toEqual([p1.id, p2.id]);
     });
   });
 });

@@ -18,6 +18,8 @@ import VerifiedIdDecoder from './VerifiedIdDecoder.js';
 export const MAX_REQUESTS = 500;
 /** Upper bound on decoded FIDO2 sessions kept in memory. */
 export const MAX_FIDO2_SESSIONS = 100;
+/** A device-code poll joins an initiation for the same client captured within this window. */
+export const DEVICE_CODE_JOIN_WINDOW_MS = 15 * 60 * 1000;
 
 class SAMLTrace {
   constructor() {
@@ -501,22 +503,23 @@ class SAMLTrace {
       const data = requestData.requestBody
         ? OAuthDecoder.flattenBody(requestData.requestBody)
         : null;
-      const clientId = data ? data.client_id : 'unknown';
-      const correlationKey = `init:${clientId}:${requestData.timestamp}`;
+      const clientId = (data && data.client_id) || 'unknown';
+      // Keyed by the unique request id (which embeds the capture time) so two
+      // initiations in the same millisecond never share a correlation group.
+      const correlationKey = `init:${clientId}:${requestData.id || requestData.timestamp}`;
       requestData.deviceCodeCorrelationKey = correlationKey;
       this.state.deviceCodeCorrelation.set(correlationKey, [requestData.id]);
       return;
     }
 
     if (requestData.flowType === 'device_code_poll') {
-      // Extract the device_code value from the POST body to use as a stable correlation key
       const data = requestData.requestBody
         ? OAuthDecoder.flattenBody(requestData.requestBody)
         : null;
       const deviceCode = data && data.device_code ? data.device_code : null;
       if (!deviceCode) return;
 
-      const key = `poll:${deviceCode}`;
+      const key = this.resolveDeviceCodeKey(deviceCode, data.client_id || null, requestData);
       requestData.deviceCodeCorrelationKey = key;
 
       if (this.state.deviceCodeCorrelation.has(key)) {
@@ -525,6 +528,44 @@ class SAMLTrace {
         this.state.deviceCodeCorrelation.set(key, [requestData.id]);
       }
     }
+  }
+
+  /**
+   * Choose the correlation key for a device-code poll.
+   *
+   * The device_code value only appears in the initiation *response*, which MV3
+   * cannot read, so polls are joined to their initiation heuristically:
+   *  1. an earlier poll for the same device_code already carries the key;
+   *  2. otherwise the most recent initiation for the same client_id, captured
+   *     within DEVICE_CODE_JOIN_WINDOW_MS and not yet joined by another code;
+   *  3. otherwise a standalone `poll:<device_code>` key.
+   */
+  resolveDeviceCodeKey(deviceCode, clientId, requestData) {
+    const requests = this.state.requests || [];
+    const correlation = this.state.deviceCodeCorrelation;
+
+    for (const r of requests) {
+      if (r === requestData || r.flowType !== 'device_code_poll' || !r.deviceCodeCorrelationKey) continue;
+      const body = r.requestBody ? OAuthDecoder.flattenBody(r.requestBody) : null;
+      if (body && body.device_code === deviceCode) return r.deviceCodeCorrelationKey;
+    }
+
+    const now = requestData.timestamp || Date.now();
+    let best = null;
+    for (const r of requests) {
+      if (r.flowType !== 'device_code_initiation' || !r.deviceCodeCorrelationKey) continue;
+      const age = now - (r.timestamp || 0);
+      if (age < 0 || age > DEVICE_CODE_JOIN_WINDOW_MS) continue;
+      const body = r.requestBody ? OAuthDecoder.flattenBody(r.requestBody) : null;
+      const initClient = body && body.client_id ? body.client_id : null;
+      if (clientId && initClient && initClient !== clientId) continue;
+      const members = correlation && correlation.get ? (correlation.get(r.deviceCodeCorrelationKey) || []) : [];
+      if (members.length > 1) continue; // already joined by a different device code
+      if (!best || (r.timestamp || 0) > (best.timestamp || 0)) best = r;
+    }
+    if (best) return best.deviceCodeCorrelationKey;
+
+    return `poll:${deviceCode}`;
   }
 
   /**
