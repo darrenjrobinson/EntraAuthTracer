@@ -582,4 +582,81 @@ describe('SamlDecoder', () => {
       }
     });
   });
+
+  // ─── Lite parser (no DOMParser, e.g. service worker) ─────────────────────
+
+  describe('parseLite', () => {
+    const IN_WINDOW = Date.parse('2024-01-01T00:30:00Z');
+
+    it('parses an AuthnRequest with the same fields as the DOM parser', () => {
+      const lite = SamlDecoder.parseLite(AUTHN_REQUEST_XML);
+      const dom = SamlDecoder.parse(AUTHN_REQUEST_XML);
+      expect(lite.parser).toBe('lite');
+      for (const key of ['messageType', 'id', 'version', 'issueInstant', 'destination', 'issuer', 'assertionConsumerServiceURL', 'providerName', 'messageSigned']) {
+        expect(lite[key]).toEqual(dom[key]);
+      }
+      expect(lite.nameIDPolicy).toEqual(dom.nameIDPolicy);
+      expect(lite.requestedAuthnContext).toEqual(dom.requestedAuthnContext);
+    });
+
+    it('parses a Response with status, assertion, conditions, authn statement and multi-value attributes', () => {
+      const lite = SamlDecoder.parseLite(RESPONSE_XML);
+      const dom = SamlDecoder.parse(RESPONSE_XML);
+      expect(lite.messageType).toBe('Response');
+      expect(lite.inResponseTo).toBe('_req123');
+      expect(lite.issuer).toBe('https://idp.example.com');
+      expect(lite.status).toEqual(dom.status);
+      expect(lite.assertion.id).toBe('_assertion1');
+      expect(lite.assertion.nameID).toEqual(dom.assertion.nameID);
+      expect(lite.assertion.conditions).toEqual(dom.assertion.conditions);
+      expect(lite.assertion.authnStatement).toEqual(dom.assertion.authnStatement);
+      expect(lite.assertion.attributes).toEqual({ email: ['user@example.com'], groups: ['admins', 'users'] });
+      expect(lite.assertion.signed).toBe(false);
+      expect(lite.messageSigned).toBe(false);
+    });
+
+    it('distinguishes message and assertion signatures and detects encryption', () => {
+      const msgSigned = RESPONSE_XML.replace('<samlp:Status>', SIGNATURE + '<samlp:Status>');
+      expect(SamlDecoder.parseLite(msgSigned).messageSigned).toBe(true);
+      expect(SamlDecoder.parseLite(msgSigned).assertion.signed).toBe(false);
+      const aSigned = RESPONSE_XML.replace('<saml:Subject>', SIGNATURE + '<saml:Subject>');
+      expect(SamlDecoder.parseLite(aSigned).messageSigned).toBe(false);
+      expect(SamlDecoder.parseLite(aSigned).assertion.signed).toBe(true);
+      const enc = RESPONSE_XML.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, '<saml:EncryptedAssertion/>');
+      expect(SamlDecoder.parseLite(enc).hasEncryptedAssertion).toBe(true);
+      expect(SamlDecoder.parseLite(enc).assertion).toBeNull();
+    });
+
+    it('parses LogoutRequest and LogoutResponse', () => {
+      const lr = SamlDecoder.parseLite(LOGOUT_REQUEST_XML);
+      expect(lr).toMatchObject({ messageType: 'LogoutRequest', nameID: 'user@example.com', sessionIndex: '_session1' });
+      const lresp = SamlDecoder.parseLite(LOGOUT_RESPONSE_XML);
+      expect(lresp.messageType).toBe('LogoutResponse');
+      expect(lresp.status.isSuccess).toBe(true);
+      expect(lresp.status.message).toBe('Successfully logged out');
+    });
+
+    it('returns an error object for text with no SAML root', () => {
+      expect(SamlDecoder.parseLite('<html/>').error).toMatch(/no recognised SAML root/);
+      expect(SamlDecoder.parseLite('').parser).toBe('lite');
+    });
+
+    it('feeds the security assessment exactly like the DOM parser', () => {
+      const liteRules = SamlDecoder.generateWarnings(SamlDecoder.parseLite(RESPONSE_XML), IN_WINDOW).map(w => w.rule);
+      const domRules = SamlDecoder.generateWarnings(SamlDecoder.parse(RESPONSE_XML), IN_WINDOW).map(w => w.rule);
+      expect(liteRules).toEqual(domRules);
+    });
+
+    it('is used automatically by parse() when DOMParser is unavailable', () => {
+      const saved = global.DOMParser;
+      delete global.DOMParser;
+      try {
+        const parsed = SamlDecoder.parse(RESPONSE_XML);
+        expect(parsed.parser).toBe('lite');
+        expect(parsed.assertion.nameID.value).toBe('user@example.com');
+      } finally {
+        global.DOMParser = saved;
+      }
+    });
+  });
 });
