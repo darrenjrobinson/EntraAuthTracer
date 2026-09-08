@@ -4,8 +4,7 @@ const CopyPlugin = require('copy-webpack-plugin');
 module.exports = {
   entry: {
     background: './src/background.js',
-    ui: './src/ui.js',
-    SAMLTrace: './src/SAMLTrace.js'
+    ui: './src/ui.main.js' // emitted as dist/src/ui.js (referenced by ui.html)
   },
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -37,7 +36,8 @@ module.exports = {
         { from: 'manifest.json', to: '.' },
         { from: 'src/*.html', to: '.' },
         { from: 'src/*.css', to: '.' },
-        { from: 'icons', to: 'icons' }
+        // Ship only the production icon sizes — source artwork lives in assets/
+        { from: 'icons/icon*.png', to: 'icons/[name][ext]' }
       ]
     })
   ],
@@ -50,5 +50,8 @@ module.exports = {
   },
   optimization: {
     minimize: false // Keep readable for debugging
+  },
+  performance: {
+    hints: false // Extension bundles are loaded locally; web asset-size budgets do not apply
   }
 };

@@ -446,4 +446,77 @@ describe('EntraClaimsDecoder', () => {
       expect(EntraClaimsDecoder.formatClaimValue('platf', '99')).toBe('99');
     });
   });
+
+  // ─── Registry coverage (table-driven) ──────────────────────────────────────
+
+  describe('ENTRA_CLAIMS registry', () => {
+    const entries = Object.entries(EntraClaimsDecoder.ENTRA_CLAIMS);
+
+    it('has the advertised breadth (40+ labelled claims)', () => {
+      expect(entries.length).toBeGreaterThanOrEqual(40);
+    });
+
+    it.each(entries.map(([name, meta]) => [name, meta.label]))('labels claim %s as "%s"', (name, label) => {
+      const processed = EntraClaimsDecoder.processEntraClaims({ [name]: 'value' });
+      expect(processed).toHaveLength(1);
+      expect(processed[0].name).toBe(name);
+      expect(processed[0].label).toBe(label);
+      expect(processed[0].isEntraSpecific).toBe(true);
+      expect(typeof processed[0].detail).toBe('string');
+      expect(processed[0].detail.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('AMR_VALUES registry', () => {
+    const entries = Object.entries(EntraClaimsDecoder.AMR_VALUES);
+
+    it('covers the 18 documented authentication method references', () => {
+      expect(entries).toHaveLength(18);
+    });
+
+    it.each(entries)('decodes amr "%s" to "%s"', (code, description) => {
+      const [decoded] = EntraClaimsDecoder.decodeAmrValues([code]);
+      expect(decoded).toEqual({ method: code, description });
+      expect(EntraClaimsDecoder.formatClaimValue('amr', [code])).toBe(`${code} (${description})`);
+    });
+  });
+
+  describe('PLATFORM_VALUES registry', () => {
+    const entries = Object.entries(EntraClaimsDecoder.PLATFORM_VALUES);
+
+    it.each(entries)('decodes platf %s to %s', (code, name) => {
+      expect(EntraClaimsDecoder.formatClaimValue('platf', code)).toBe(`${code} — ${name}`);
+      expect(EntraClaimsDecoder.formatClaimValue('platf', Number(code))).toBe(`${code} — ${name}`);
+    });
+  });
+
+  // ─── Warning rule ids ──────────────────────────────────────────────────────
+
+  describe('generateWarnings rule ids', () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    it.each([
+      ['expiry', 'error', { exp: now - 60 }],
+      ['expiry_soon', 'warning', { exp: now + 120 }],
+      ['long_lifetime', 'info', { iat: now - 100, exp: now + 7200 }],
+      ['guest_account', 'info', { acct: 1, exp: now + 3600 }],
+      ['public_client', 'warning', { azpacr: '0', exp: now + 3600 }],
+      ['cae_not_enabled', 'info', { iss: 'https://sts.windows.net/tenant/', exp: now + 3600 }]
+    ])('%s → rule jwt_… with severity %s', (type, severity, payload) => {
+      const warning = EntraClaimsDecoder.generateWarnings(payload).find(w => w.type === type);
+      expect(warning).toBeDefined();
+      expect(warning.rule).toBe(`jwt_${type}`);
+      expect(warning.severity).toBe(severity);
+    });
+
+    it('every emitted warning carries type, rule, severity and message', () => {
+      const warnings = EntraClaimsDecoder.generateWarnings({ tid: 't', acct: 1, azpacr: 0, iat: now - 10, exp: now - 5 });
+      expect(warnings.length).toBeGreaterThanOrEqual(3);
+      for (const w of warnings) {
+        expect(w.rule).toBe(`jwt_${w.type}`);
+        expect(['error', 'warning', 'info']).toContain(w.severity);
+        expect(typeof w.message).toBe('string');
+      }
+    });
+  });
 });

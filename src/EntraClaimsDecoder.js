@@ -299,14 +299,13 @@ class EntraClaimsDecoder {
   static generateWarnings(payload) {
     const warnings = [];
     const now = Date.now();
+    // `type` is the historical discriminator; `rule` is the stable id shared with
+    // the other decoders (prefixed jwt_).
+    const push = (type, severity, message) => warnings.push({ type, rule: `jwt_${type}`, message, severity });
 
     // Token already expired
     if (payload.exp && payload.exp * 1000 < now) {
-      warnings.push({
-        type: 'expiry',
-        message: 'Token has expired',
-        severity: 'error'
-      });
+      push('expiry', 'error', 'Token has expired');
     }
 
     // Token expiring soon (< 5 minutes)
@@ -314,11 +313,7 @@ class EntraClaimsDecoder {
       const msRemaining = payload.exp * 1000 - now;
       if (msRemaining > 0 && msRemaining < 5 * 60 * 1000) {
         const secsRemaining = Math.floor(msRemaining / 1000);
-        warnings.push({
-          type: 'expiry_soon',
-          message: `Token expires in ${secsRemaining} seconds`,
-          severity: 'warning'
-        });
+        push('expiry_soon', 'warning', `Token expires in ${secsRemaining} seconds`);
       }
     }
 
@@ -326,40 +321,24 @@ class EntraClaimsDecoder {
     if (payload.iat && payload.exp) {
       const lifetimeSecs = payload.exp - payload.iat;
       if (lifetimeSecs > 3600) {
-        warnings.push({
-          type: 'long_lifetime',
-          message: `Token lifetime is ${Math.round(lifetimeSecs / 60)} minutes — access tokens should ideally be ≤60 minutes`,
-          severity: 'info'
-        });
+        push('long_lifetime', 'info', `Token lifetime is ${Math.round(lifetimeSecs / 60)} minutes — access tokens should ideally be ≤60 minutes`);
       }
     }
 
     // Guest account
     if (payload.acct === 1 || payload.acct === '1') {
-      warnings.push({
-        type: 'guest_account',
-        message: 'Guest account — this user is a B2B guest in this tenant',
-        severity: 'info'
-      });
+      push('guest_account', 'info', 'Guest account — this user is a B2B guest in this tenant');
     }
 
     // Public client (no client authentication)
     if (payload.azpacr === 0 || payload.azpacr === '0') {
-      warnings.push({
-        type: 'public_client',
-        message: 'Public client authentication (azpacr=0) — no client secret or certificate was used',
-        severity: 'warning'
-      });
+      push('public_client', 'warning', 'Public client authentication (azpacr=0) — no client secret or certificate was used');
     }
 
     // CAE not enabled — informational hint for Entra tokens
     const isEntra = this.isEntraToken(payload);
     if (isEntra && !this.detectCAE(payload)) {
-      warnings.push({
-        type: 'cae_not_enabled',
-        message: 'CAE (Continuous Access Evaluation) not detected — add client capabilities claim (cp1) to enable revocation events',
-        severity: 'info'
-      });
+      push('cae_not_enabled', 'info', 'CAE (Continuous Access Evaluation) not detected — add client capabilities claim (cp1) to enable revocation events');
     }
 
     return warnings;

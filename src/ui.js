@@ -6,7 +6,9 @@
 import EntraClaimsDecoder from './EntraClaimsDecoder.js';
 import OAuthDecoder from './OAuthDecoder.js';
 import SamlDecoder from './SamlDecoder.js';
-import VerifiedIdDecoder from './VerifiedIdDecoder.js';
+import FlowCorrelator from './FlowCorrelator.js';
+import Sanitize from './Sanitize.js';
+import Exporters from './Exporters.js';
 
 class EntraAuthTracerUI {
   constructor() {
@@ -42,7 +44,7 @@ class EntraAuthTracerUI {
     const versionEl = document.getElementById('versionInfo');
     if (versionEl) {
       versionEl.innerHTML =
-        `v${manifest.version} &middot; Created by <a class="repo-link" href="https://blog.darrenjrobinson.com" target="_blank" rel="noopener noreferrer">Darren J Robinson</a> &middot; <a class="repo-link" href="https://github.com/DarrenRobinson/EntraAuthTracer" target="_blank" rel="noopener noreferrer">GitHub</a>`;
+        `v${this.escapeHtml(manifest.version)} &middot; Created by <a class="repo-link" href="https://blog.darrenjrobinson.com" target="_blank" rel="noopener noreferrer">Darren J Robinson</a> &middot; <a class="repo-link" href="${Exporters.REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>`;
     }
   }
 
@@ -235,8 +237,8 @@ class EntraAuthTracerUI {
   }
 
   /**
-   * Export captured requests in the requested format.
-   * @param {'json'|'markdown'|'txt'} format
+   * Export captured requests in the requested format (see Exporters).
+   * @param {'json'|'markdown'|'txt'|'pdf'} format
    */
   doExport(format) {
     const requests = this.currentRequests;
@@ -244,32 +246,12 @@ class EntraAuthTracerUI {
       alert('No requests to export. Capture some authentication traffic first.');
       return;
     }
+    if (!Exporters.EXT[format]) return;
 
     const now = new Date();
-    const ts  = now.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-
-    switch (format) {
-      case 'json': {
-        const content = this.buildJsonExport(requests, now);
-        this.downloadFile(content, `entra-auth-trace_${ts}.json`, 'application/json');
-        break;
-      }
-      case 'markdown': {
-        const content = this.buildMarkdownExport(requests, now);
-        this.downloadFile(content, `entra-auth-trace_${ts}.md`, 'text/markdown');
-        break;
-      }
-      case 'txt': {
-        const content = this.buildTxtExport(requests, now);
-        this.downloadFile(content, `entra-auth-trace_${ts}.txt`, 'text/plain');
-        break;
-      }
-      case 'pdf': {
-        const content = this.buildPdfHtml(requests, now);
-        this.downloadFile(content, `entra-auth-trace_${ts}.html`, 'text/html');
-        break;
-      }
-    }
+    const version = chrome.runtime.getManifest().version;
+    const content = Exporters.build(format, requests, now, version);
+    this.downloadFile(content, Exporters.filename(format, now), Exporters.MIME[format]);
   }
 
   /**
@@ -290,464 +272,16 @@ class EntraAuthTracerUI {
     }, 1000);
   }
 
-  // ─── JSON export ─────────────────────────────────────────────────────────────
-
-  buildJsonExport(requests, now) {
-    const meta = {
-      generated_at: now.toISOString(),
-      extension_version: '1.0.0',
-      total_requests: requests.length,
-      export_scope: 'complete_session'
-    };
-
-    const exportData = {
-      export_metadata: meta,
-      requests: requests.map(r => this.requestToJsonObj(r))
-    };
-
-    return JSON.stringify(exportData, null, 2);
-  }
-
-  requestToJsonObj(r) {
-    const obj = {
-      id: r.id,
-      timestamp: new Date(r.timestamp).toISOString(),
-      method: r.method,
-      url: r.url,
-      flow_type: r.flowType,
-      status: r.status
-    };
-    if (r.statusCode) obj.status_code = r.statusCode;
-    if (r.error)      obj.error       = r.error;
-    if (r.requestHeaders && r.requestHeaders.length)  obj.request_headers  = r.requestHeaders;
-    if (r.responseHeaders && r.responseHeaders.length) obj.response_headers = r.responseHeaders;
-    if (r.requestBody)  obj.request_body  = r.requestBody;
-    if (r.responseBody) obj.response_body = r.responseBody;
-    if (r.oauthAnalysis)  obj.oauth_analysis  = r.oauthAnalysis;
-    if (r.fido2Analysis)  obj.fido2_analysis  = r.fido2Analysis;
-    if (r.samlAnalysis)   obj.saml_analysis   = r.samlAnalysis;
-    if (r.didAnalysis)    obj.did_analysis     = r.didAnalysis;
-    return obj;
-  }
-
-  // ─── Markdown export ─────────────────────────────────────────────────────────
-
-  buildMarkdownExport(requests, now) {
-    const lines = [];
-    lines.push('# Entra Auth Trace Report');
-    lines.push('');
-    lines.push(`**Generated:** ${now.toUTCString()}`);
-    lines.push(`**Extension:** Entra Auth Tracer v1.0.0`);
-    lines.push(`**Total Requests:** ${requests.length}`);
-    lines.push('');
-
-    // Summary table
-    const flowCounts = {};
-    const statusCounts = { completed: 0, error: 0, pending: 0 };
-    for (const r of requests) {
-      flowCounts[r.flowType] = (flowCounts[r.flowType] || 0) + 1;
-      if (r.status in statusCounts) statusCounts[r.status]++;
-    }
-    lines.push('## Session Summary');
-    lines.push('');
-    lines.push('| Metric | Value |');
-    lines.push('|---|---|');
-    lines.push(`| **Total Requests** | ${requests.length} |`);
-    lines.push(`| **Completed** | ${statusCounts.completed} |`);
-    lines.push(`| **Errors** | ${statusCounts.error} |`);
-    lines.push(`| **Pending** | ${statusCounts.pending} |`);
-    for (const [flow, count] of Object.entries(flowCounts)) {
-      lines.push(`| **${flow}** | ${count} |`);
-    }
-    lines.push('');
-
-    // Per-request details
-    lines.push('## Request Details');
-    lines.push('');
-
-    requests.forEach((r, i) => {
-      const url = (() => { try { return new URL(r.url); } catch { return { pathname: r.url, hostname: '' }; } })();
-      lines.push(`### Request ${i + 1}: ${r.method} ${url.pathname}`);
-      lines.push('');
-      lines.push('| Field | Value |');
-      lines.push('|---|---|');
-      lines.push(`| **Timestamp** | ${new Date(r.timestamp).toISOString()} |`);
-      lines.push(`| **Method** | ${r.method} |`);
-      lines.push(`| **URL** | \`${r.url}\` |`);
-      lines.push(`| **Flow Type** | ${r.flowType} |`);
-      lines.push(`| **Status** | ${r.status}${r.statusCode ? ' (' + r.statusCode + ')' : ''} |`);
-      if (r.error) lines.push(`| **Error** | ${r.error} |`);
-      lines.push('');
-
-      // OAuth analysis
-      if (r.oauthAnalysis && !r.oauthAnalysis.error) {
-        const a = r.oauthAnalysis;
-        lines.push('#### OAuth 2.1 Analysis');
-        lines.push('');
-        lines.push('| Field | Value |');
-        lines.push('|---|---|');
-        if (a.label)      lines.push(`| **Grant Type** | ${a.label} |`);
-        if (a.clientId)   lines.push(`| **Client ID** | \`${a.clientId}\` |`);
-        if (a.redirectUri) lines.push(`| **Redirect URI** | ${a.redirectUri} |`);
-        if (a.responseType) lines.push(`| **Response Type** | ${a.responseType} |`);
-        if (a.pkce)       lines.push(`| **PKCE** | ${a.pkce.codeChallengeMethod} |`);
-        if (a.scopeLabels && a.scopeLabels.length) {
-          lines.push(`| **Scopes** | ${a.scopeLabels.map(s => s.scope).join(', ')} |`);
-        }
-        if (a.warnings && a.warnings.length) {
-          lines.push('');
-          lines.push('**Security Warnings:**');
-          lines.push('');
-          for (const w of a.warnings) {
-            lines.push(`- [${w.severity.toUpperCase()}] ${w.message}`);
-          }
-        }
-        lines.push('');
-      }
-
-      // FIDO2 analysis
-      if (r.fido2Analysis && !r.fido2Analysis.error) {
-        const f = r.fido2Analysis;
-        lines.push('#### FIDO2 Analysis');
-        lines.push('');
-        if (f.clientDataJSON) {
-          const cd = f.clientDataJSON;
-          lines.push('| Field | Value |');
-          lines.push('|---|---|');
-          lines.push(`| **Type** | ${cd.type} |`);
-          lines.push(`| **Origin** | ${cd.origin} |`);
-          lines.push(`| **Cross Origin** | ${cd.crossOrigin ? 'Yes' : 'No'} |`);
-          lines.push('');
-        }
-      }
-
-      // Verified ID / DID analysis
-      if (r.didAnalysis && !r.didAnalysis.error) {
-        const d = r.didAnalysis;
-        lines.push('#### Verified ID / DID Analysis');
-        lines.push('');
-        lines.push('| Field | Value |');
-        lines.push('|---|---|');
-        lines.push(`| **Operation** | ${d.operation} |`);
-        if (d.did)                  lines.push(`| **DID** | \`${d.did}\` |`);
-        if (d.requestId)            lines.push(`| **Request ID** | \`${d.requestId}\` |`);
-        if (d.credentialType)       lines.push(`| **Credential Type** | ${d.credentialType} |`);
-        if (d.authority)            lines.push(`| **Authority** | ${d.authority} |`);
-        if (d.clientName)           lines.push(`| **Client Name** | ${d.clientName} |`);
-        if (d.requestedCredentials) lines.push(`| **Requested Credentials** | ${d.requestedCredentials.join(', ')} |`);
-        if (d.callbackUrl)          lines.push(`| **Callback URL** | ${d.callbackUrl} |`);
-        if (d.warnings && d.warnings.length) {
-          lines.push('');
-          lines.push('**Warnings:**');
-          for (const w of d.warnings) lines.push(`- [${w.severity.toUpperCase()}] ${w.message}`);
-        }
-        lines.push('');
-      }
-
-      lines.push('---');
-      lines.push('');
-    });
-
-    lines.push('');
-    lines.push('*Generated by [Entra Auth Tracer](https://github.com/DarrenRobinson/EntraAuthTracer)*');
-    return lines.join('\n');
-  }
-
-  // ─── Plain text export ───────────────────────────────────────────────────────
-
-  buildTxtExport(requests, now) {
-    const lines = [];
-    const hr = '='.repeat(72);
-    const hr2 = '-'.repeat(72);
-
-    lines.push('ENTRA AUTH TRACE REPORT');
-    lines.push(hr);
-    lines.push(`Generated : ${now.toUTCString()}`);
-    lines.push(`Extension : Entra Auth Tracer v1.0.0`);
-    lines.push(`Requests  : ${requests.length}`);
-    lines.push(hr);
-    lines.push('');
-
-    requests.forEach((r, i) => {
-      lines.push(`REQUEST ${i + 1} of ${requests.length}`);
-      lines.push(hr2);
-      lines.push(`Time      : ${new Date(r.timestamp).toISOString()}`);
-      lines.push(`Method    : ${r.method}`);
-      lines.push(`URL       : ${r.url}`);
-      lines.push(`Flow      : ${r.flowType}`);
-      lines.push(`Status    : ${r.status}${r.statusCode ? ' (' + r.statusCode + ')' : ''}`);
-      if (r.error) lines.push(`Error     : ${r.error}`);
-
-      if (r.requestHeaders && r.requestHeaders.length) {
-        lines.push('');
-        lines.push('Request Headers:');
-        for (const h of r.requestHeaders) {
-          lines.push(`  ${h.name}: ${h.value}`);
-        }
-      }
-
-      if (r.requestBody) {
-        lines.push('');
-        lines.push('Request Body:');
-        if (typeof r.requestBody === 'string') {
-          lines.push('  ' + r.requestBody.substring(0, 2000));
-        } else if (r.requestBody.formData) {
-          for (const [k, v] of Object.entries(r.requestBody.formData)) {
-            lines.push(`  ${k}=${Array.isArray(v) ? v[0] : v}`);
-          }
-        } else {
-          lines.push('  ' + JSON.stringify(r.requestBody).substring(0, 2000));
-        }
-      }
-
-      if (r.responseHeaders && r.responseHeaders.length) {
-        lines.push('');
-        lines.push('Response Headers:');
-        for (const h of r.responseHeaders) {
-          lines.push(`  ${h.name}: ${h.value}`);
-        }
-      }
-
-      if (r.oauthAnalysis && !r.oauthAnalysis.error) {
-        const a = r.oauthAnalysis;
-        lines.push('');
-        lines.push('OAuth 2.1 Analysis:');
-        if (a.label)       lines.push(`  Grant Type  : ${a.label}`);
-        if (a.clientId)    lines.push(`  Client ID   : ${a.clientId}`);
-        if (a.redirectUri) lines.push(`  Redirect URI: ${a.redirectUri}`);
-        if (a.pkce)        lines.push(`  PKCE        : ${a.pkce.codeChallengeMethod}`);
-        if (a.scopeLabels && a.scopeLabels.length) {
-          lines.push(`  Scopes      : ${a.scopeLabels.map(s => s.scope).join(' ')}`);
-        }
-        if (a.warnings && a.warnings.length) {
-          lines.push('  Warnings:');
-          for (const w of a.warnings) lines.push(`    [${w.severity.toUpperCase()}] ${w.message}`);
-        }
-      }
-
-      if (r.fido2Analysis && !r.fido2Analysis.error) {
-        const f = r.fido2Analysis;
-        lines.push('');
-        lines.push('FIDO2 Analysis:');
-        if (f.clientDataJSON) {
-          lines.push(`  Type        : ${f.clientDataJSON.type}`);
-          lines.push(`  Origin      : ${f.clientDataJSON.origin}`);
-        }
-      }
-
-      if (r.didAnalysis && !r.didAnalysis.error) {
-        const d = r.didAnalysis;
-        lines.push('');
-        lines.push('Verified ID / DID Analysis:');
-        lines.push(`  Operation   : ${d.operation}`);
-        if (d.did)                  lines.push(`  DID         : ${d.did}`);
-        if (d.requestId)            lines.push(`  Request ID  : ${d.requestId}`);
-        if (d.credentialType)       lines.push(`  Cred Type   : ${d.credentialType}`);
-        if (d.authority)            lines.push(`  Authority   : ${d.authority}`);
-        if (d.requestedCredentials) lines.push(`  Requested   : ${d.requestedCredentials.join(', ')}`);
-        if (d.callbackUrl)          lines.push(`  Callback    : ${d.callbackUrl}`);
-        if (d.warnings && d.warnings.length) {
-          lines.push('  Warnings:');
-          for (const w of d.warnings) lines.push(`    [${w.severity.toUpperCase()}] ${w.message}`);
-        }
-      }
-
-      lines.push('');
-    });
-
-    lines.push(hr);
-    lines.push('Generated by Entra Auth Tracer');
-    return lines.join('\n');
-  }
-
-  // ─── PDF / Print HTML export ─────────────────────────────────────────────────
-
-  /**
-   * Build a print-optimised HTML report.
-   * Saved as .html — user opens the file and presses Ctrl+P to save as PDF.
-   */
-  buildPdfHtml(requests, now) {
-    const e = (v) => String(v == null ? '' : v)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const ts = now.toUTCString();
-
-    // Flow statistics
-    const flowCounts = {};
-    const statusCounts = { completed: 0, error: 0, pending: 0 };
-    for (const r of requests) {
-      const cat = this.getFlowTypeCategory(r.flowType);
-      flowCounts[cat] = (flowCounts[cat] || 0) + 1;
-      if (r.status in statusCounts) statusCounts[r.status]++;
-    }
-
-    const summaryRows = Object.entries(flowCounts)
-      .map(([flow, count]) => `<tr><td>${e(flow.toUpperCase())}</td><td>${count}</td></tr>`)
-      .join('');
-
-    const requestSections = requests.map((r, i) => {
-      let pathname = r.url || '';
-      let hostname = '';
-      try { const u = new URL(r.url); pathname = u.pathname; hostname = u.hostname; } catch { /* keep */ }
-
-      let sec = `
-        <div class="req-section">
-          <h3>Request ${i + 1}: <span class="method">${e(r.method || 'GET')}</span> ${e(pathname)}</h3>
-          <p class="req-host">${e(hostname)}</p>
-          <table>
-            <tr><td class="lbl">Timestamp</td><td>${e(new Date(r.timestamp).toISOString())}</td></tr>
-            <tr><td class="lbl">URL</td><td class="url-cell">${e(r.url)}</td></tr>
-            <tr><td class="lbl">Flow Type</td><td>${e(r.flowType)}</td></tr>
-            <tr><td class="lbl">Status</td><td class="${r.status === 'completed' ? 'ok' : r.status === 'error' ? 'err' : ''}">${e(r.status)}${r.statusCode ? ' (' + r.statusCode + ')' : ''}</td></tr>
-            ${r.error ? `<tr><td class="lbl">Error</td><td class="err">${e(r.error)}</td></tr>` : ''}
-          </table>`;
-
-      if (r.oauthAnalysis && !r.oauthAnalysis.error) {
-        const a = r.oauthAnalysis;
-        sec += `
-          <h4>OAuth 2.1 Analysis</h4>
-          <table>
-            ${a.label      ? `<tr><td class="lbl">Grant Type</td><td>${e(a.label)}</td></tr>` : ''}
-            ${a.clientId   ? `<tr><td class="lbl">Client ID</td><td class="mono">${e(a.clientId)}</td></tr>` : ''}
-            ${a.redirectUri ? `<tr><td class="lbl">Redirect URI</td><td>${e(a.redirectUri)}</td></tr>` : ''}
-            ${a.pkce       ? `<tr><td class="lbl">PKCE</td><td>${e(a.pkce.codeChallengeMethod)}${a.pkce.isS256 ? ' ✓ S256' : ' ⚠ non-S256'}</td></tr>` : ''}
-            ${a.scopes && a.scopes.length ? `<tr><td class="lbl">Scopes</td><td>${e(a.scopes.join(' '))}</td></tr>` : ''}
-            ${a.warnings && a.warnings.length ? `<tr><td class="lbl">Warnings</td><td class="warn">${a.warnings.map(w => e('[' + w.severity.toUpperCase() + '] ' + w.message)).join('<br>')}</td></tr>` : ''}
-          </table>`;
-      }
-
-      if (r.fido2Analysis && !r.fido2Analysis.error && r.fido2Analysis.clientDataJSON) {
-        const cd = r.fido2Analysis.clientDataJSON;
-        sec += `
-          <h4>FIDO2 Analysis</h4>
-          <table>
-            <tr><td class="lbl">Type</td><td>${e(cd.type)}</td></tr>
-            <tr><td class="lbl">Origin</td><td>${e(cd.origin)}</td></tr>
-            <tr><td class="lbl">Cross Origin</td><td>${cd.crossOrigin ? 'Yes' : 'No'}</td></tr>
-          </table>`;
-      }
-
-      sec += '</div>';
-      return sec;
-    }).join('<hr class="req-hr">');
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Entra Auth Trace Report</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #323130; background: #fff; padding: 24px; max-width: 900px; margin: 0 auto; }
-    .print-hint { background: #0078d4; color: #fff; padding: 10px 16px; border-radius: 4px; margin-bottom: 20px; font-size: 13px; display: flex; align-items: center; gap: 10px; }
-    .print-hint kbd { background: rgba(255,255,255,0.2); padding: 2px 7px; border-radius: 3px; font-family: inherit; }
-    h1 { font-size: 20px; color: #0078d4; border-bottom: 2px solid #0078d4; padding-bottom: 8px; margin-bottom: 16px; }
-    h2 { font-size: 15px; color: #323130; margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #edebe9; }
-    h3 { font-size: 13px; color: #0078d4; margin: 0 0 4px; }
-    h4 { font-size: 11px; color: #605e5c; margin: 10px 0 4px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
-    .meta { color: #605e5c; font-size: 12px; margin-bottom: 16px; }
-    .stats { display: flex; gap: 24px; margin-bottom: 16px; flex-wrap: wrap; }
-    .stat { text-align: center; min-width: 80px; }
-    .stat-val { font-size: 28px; font-weight: 700; color: #0078d4; line-height: 1; }
-    .stat-val.ok { color: #107c10; }
-    .stat-val.err { color: #d13438; }
-    .stat-lbl { font-size: 11px; color: #605e5c; margin-top: 2px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-    th { background: #f3f2f1; text-align: left; padding: 5px 8px; font-size: 11px; color: #605e5c; font-weight: 700; border-bottom: 1px solid #d2d0ce; }
-    td { padding: 4px 8px; border-bottom: 1px solid #edebe9; vertical-align: top; font-size: 12px; }
-    td.lbl { font-weight: 600; color: #605e5c; width: 130px; white-space: nowrap; }
-    .url-cell { word-break: break-all; font-family: 'Consolas', monospace; font-size: 10px; }
-    .mono { font-family: 'Consolas', monospace; font-size: 11px; }
-    .method { font-family: 'Consolas', monospace; font-weight: 700; }
-    .ok { color: #107c10; font-weight: 600; }
-    .err { color: #d13438; }
-    .warn { color: #ff8c00; }
-    .req-section { margin: 16px 0; padding: 12px 14px; border: 1px solid #edebe9; border-radius: 4px; }
-    .req-host { font-size: 11px; color: #605e5c; margin-bottom: 6px; }
-    hr.req-hr { border: none; border-top: 2px solid #edebe9; margin: 4px 0; }
-    .footer { margin-top: 28px; font-size: 11px; color: #605e5c; text-align: center; padding-top: 10px; border-top: 1px solid #edebe9; }
-    @media print {
-      .print-hint { display: none !important; }
-      .req-section { page-break-inside: avoid; }
-      body { padding: 0; }
-    }
-  </style>
-</head>
-<body>
-  <div class="print-hint">
-    &#128196; To save as PDF: press <kbd>Ctrl+P</kbd> (or &#8984;P), then choose <em>Save as PDF</em> as the destination.
-  </div>
-  <h1>&#128274; Entra Auth Trace Report</h1>
-  <p class="meta">Generated: <strong>${e(ts)}</strong> &nbsp;&middot;&nbsp; Entra Auth Tracer v1.0.0 &nbsp;&middot;&nbsp; <strong>${requests.length}</strong> request${requests.length !== 1 ? 's' : ''}</p>
-
-  <h2>Session Summary</h2>
-  <div class="stats">
-    <div class="stat"><div class="stat-val">${requests.length}</div><div class="stat-lbl">Total</div></div>
-    <div class="stat"><div class="stat-val ok">${statusCounts.completed}</div><div class="stat-lbl">Completed</div></div>
-    <div class="stat"><div class="stat-val err">${statusCounts.error}</div><div class="stat-lbl">Errors</div></div>
-    <div class="stat"><div class="stat-val" style="color:#ff8c00">${statusCounts.pending}</div><div class="stat-lbl">Pending</div></div>
-  </div>
-  <table>
-    <tr><th>Flow Type</th><th>Count</th></tr>
-    ${summaryRows}
-  </table>
-
-  <h2>Request Details</h2>
-  ${requestSections}
-
-  <div class="footer">Generated by <strong>Entra Auth Tracer</strong> &mdash; Microsoft Entra authentication inspector</div>
-</body>
-</html>`;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-
   /**
    * Apply current filters and render.  Used by both loadData and filter change handlers.
    */
   filterAndRender() {
-    const hasFilters = this.filters.search || this.filters.method || this.filters.flow || this.filters.status;
-    const requests = hasFilters ? this._applyFilters(this.currentRequests) : this.currentRequests;
+    const requests = FlowCorrelator.applyFilters(this.currentRequests, this.filters);
     if (this.viewMode === 'timeline') {
       this.renderTimeline(requests);
     } else {
       this.renderRequestList(requests);
     }
-  }
-
-  /**
-   * Return a filtered subset of requests matching all active filters.
-   */
-  _applyFilters(requests) {
-    return requests.filter(req => {
-      if (this.filters.search && !req.url.toLowerCase().includes(this.filters.search.toLowerCase())) return false;
-      if (this.filters.method && req.method !== this.filters.method) return false;
-      if (this.filters.flow) {
-        if (this.getFlowTypeCategory(req.flowType) !== this.filters.flow) return false;
-      }
-      if (this.filters.status && req.status !== this.filters.status) return false;
-      return true;
-    });
-  }
-
-  /**
-   * Filter requests based on current filters (kept for back-compat callers)
-   */
-  filterRequests() {
-    this.filterAndRender();
-  }
-
-  /**
-   * Get flow type category for filtering
-   */
-  getFlowTypeCategory(flowType) {
-    if (!flowType) return 'other';
-    if (flowType.startsWith('fido2_')) return 'fido2';
-    if (flowType.startsWith('device_code')) return 'device_code';
-    if (flowType === 'client_credentials' || flowType === 'refresh_token' ||
-        flowType.includes('oauth') || flowType.includes('pkce') || flowType.includes('authcode')) return 'oauth';
-    if (flowType === 'saml' || flowType === 'wsfed') return 'saml';
-    if (flowType.startsWith('did_') || flowType.startsWith('vc_')) return 'did';
-    return 'other';
   }
 
   // ─── View mode ────────────────────────────────────────────────────────────────
@@ -775,124 +309,8 @@ class EntraAuthTracerUI {
   // ─── Timeline view ────────────────────────────────────────────────────────────
 
   /**
-   * Group requests into correlated flow groups for the timeline view.
-   * Returns an array of { type, key, label, requests[] } objects.
-   */
-  computeFlowGroups(requests) {
-    const groups = [];
-    const assignedIds = new Set();
-
-    // 1. Device Code correlation groups (keyed by deviceCodeCorrelationKey)
-    const dcMap = new Map();
-    for (const r of requests) {
-      if (r.deviceCodeCorrelationKey) {
-        if (!dcMap.has(r.deviceCodeCorrelationKey)) dcMap.set(r.deviceCodeCorrelationKey, []);
-        dcMap.get(r.deviceCodeCorrelationKey).push(r);
-        assignedIds.add(r.id);
-      }
-    }
-    for (const [key, reqs] of dcMap) {
-      const sorted = reqs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      const clientId = (sorted[0].oauthAnalysis && sorted[0].oauthAnalysis.clientId)
-        ? sorted[0].oauthAnalysis.clientId.substring(0, 8) + '…'
-        : key.substring(0, 8) + '…';
-      groups.push({ type: 'device_code', key, label: `Device Code — ${clientId}`, requests: sorted });
-    }
-
-    // 2. Verified ID / DID flows — group by hostname within a 30-second session window
-    const didReqs = requests.filter(r =>
-      !assignedIds.has(r.id) &&
-      (r.flowType && (r.flowType.startsWith('did_') || r.flowType.startsWith('vc_')))
-    );
-    const byDidHost = new Map();
-    for (const r of didReqs) {
-      let host = 'did';
-      try { host = new URL(r.url).hostname; } catch { /* keep */ }
-      if (!byDidHost.has(host)) byDidHost.set(host, []);
-      byDidHost.get(host).push(r);
-    }
-    for (const [host, reqs] of byDidHost) {
-      const sorted = reqs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      let sessionStart = null;
-      let session = [];
-      const flushDidSession = () => {
-        if (session.length === 0) return;
-        const firstOp = session[0].didAnalysis && session[0].didAnalysis.operation
-          ? session[0].didAnalysis.operation
-          : 'Verified ID Request';
-        const lbl = session.length === 1 ? firstOp : `Verified ID Flow — ${firstOp}`;
-        groups.push({ type: 'did', key: `did_${host}_${sessionStart}`, label: lbl, requests: session });
-        session = [];
-        sessionStart = null;
-      };
-      for (const r of sorted) {
-        if (sessionStart === null || (r.timestamp - sessionStart) <= 30000) {
-          session.push(r);
-          assignedIds.add(r.id);
-          if (sessionStart === null) sessionStart = r.timestamp;
-        } else {
-          flushDidSession();
-          session = [r];
-          sessionStart = r.timestamp;
-          assignedIds.add(r.id);
-        }
-      }
-      flushDidSession();
-    }
-
-    // 2. OAuth flows sharing the same clientId within a 60-second session window
-    const oauthReqs = requests.filter(r =>
-      !assignedIds.has(r.id) && r.oauthAnalysis && !r.oauthAnalysis.error && r.oauthAnalysis.clientId
-    );
-    const byClient = new Map();
-    for (const r of oauthReqs) {
-      const cid = r.oauthAnalysis.clientId;
-      if (!byClient.has(cid)) byClient.set(cid, []);
-      byClient.get(cid).push(r);
-    }
-    for (const [clientId, reqs] of byClient) {
-      const sorted = reqs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      // Split into sessions: any gap > 60s starts a new session
-      let sessionStart = null;
-      let session = [];
-      const flushSession = () => {
-        if (session.length === 0) return;
-        const lbl = session.length === 1
-          ? (session[0].oauthAnalysis.label || 'OAuth Request')
-          : `OAuth Flow — ${session[0].oauthAnalysis.label || clientId.substring(0, 8) + '…'}`;
-        groups.push({ type: 'oauth', key: `oauth_${clientId}_${sessionStart}`, label: lbl, requests: session });
-        session = [];
-        sessionStart = null;
-      };
-      for (const r of sorted) {
-        if (sessionStart === null || (r.timestamp - sessionStart) <= 60000) {
-          session.push(r);
-          assignedIds.add(r.id);
-          if (sessionStart === null) sessionStart = r.timestamp;
-        } else {
-          flushSession();
-          session = [r];
-          sessionStart = r.timestamp;
-          assignedIds.add(r.id);
-        }
-      }
-      flushSession();
-    }
-
-    // 3. Remaining requests as standalone (single-item) entries, preserving time order
-    const remaining = requests.filter(r => !assignedIds.has(r.id));
-    for (const r of remaining) {
-      groups.push({ type: 'standalone', key: r.id, label: null, requests: [r] });
-    }
-
-    // Sort groups by the timestamp of their first request
-    groups.sort((a, b) => ((a.requests[0] && a.requests[0].timestamp) || 0) - ((b.requests[0] && b.requests[0].timestamp) || 0));
-
-    return groups;
-  }
-
-  /**
    * Render a single flow group (multi-request or standalone) in timeline view.
+   * Grouping itself lives in FlowCorrelator.computeFlowGroups.
    */
   renderFlowGroup(group) {
     const e = (v) => this.escapeHtml(v);
@@ -922,9 +340,10 @@ class EntraAuthTracerUI {
       const time = new Date(r.timestamp || Date.now()).toLocaleTimeString();
       const status = r.status || 'pending';
       const statusIcon = status === 'completed' ? '✓' : status === 'error' ? '✗' : '⧖';
-      let shortUrl = r.url || '';
-      try { shortUrl = new URL(r.url).pathname; } catch { /* keep */ }
-      const stepDesc = this._getFlowStepDesc(r, idx);
+      const safeUrl = Sanitize.redactUrl(r.url || '');
+      let shortUrl = safeUrl;
+      try { shortUrl = new URL(safeUrl).pathname; } catch { /* keep */ }
+      const stepDesc = FlowCorrelator.getFlowStepDesc(r, idx);
       const selectedClass = this.selectedRequest && this.selectedRequest.id === r.id ? ' selected' : '';
 
       html += `
@@ -932,7 +351,7 @@ class EntraAuthTracerUI {
           <span class="fgi-step">${idx + 1}</span>
           <span class="fgi-time">${time}</span>
           <span class="fgi-method">${e(r.method || 'GET')}</span>
-          <span class="fgi-url" title="${e(r.url)}">${e(shortUrl)}</span>
+          <span class="fgi-url" title="${e(safeUrl)}">${e(shortUrl)}</span>
           <span class="fgi-status status-${status}">${statusIcon}</span>
           ${stepDesc ? `<span class="fgi-desc">${e(stepDesc)}</span>` : ''}
         </div>`;
@@ -940,18 +359,6 @@ class EntraAuthTracerUI {
 
     html += '</div>';
     return html;
-  }
-
-  /**
-   * Return a short step description for a request within a flow group.
-   */
-  _getFlowStepDesc(r, idx) {
-    if (r.flowType === 'device_code_initiation') return 'Initiation';
-    if (r.flowType && r.flowType.startsWith('device_code') && r.status === 'completed') return 'Token issued';
-    if (r.flowType && r.flowType.startsWith('device_code')) return `Poll #${idx}`;
-    if (r.didAnalysis && r.didAnalysis.operation) return r.didAnalysis.operation;
-    if (r.oauthAnalysis && r.oauthAnalysis.label) return r.oauthAnalysis.label;
-    return '';
   }
 
   /**
@@ -970,7 +377,7 @@ class EntraAuthTracerUI {
       return;
     }
 
-    const groups = this.computeFlowGroups(requests);
+    const groups = FlowCorrelator.computeFlowGroups(requests);
     let html = '<div class="timeline-view">';
     for (const group of groups) html += this.renderFlowGroup(group);
     html += '</div>';
@@ -990,41 +397,14 @@ class EntraAuthTracerUI {
   // ─── Flow correlation ────────────────────────────────────────────────────────
 
   /**
-   * Return requests correlated with the given request (same device code session or
-   * same OAuth clientId within a 60-second window), sorted chronologically.
-   * The request itself is NOT included in the returned array.
-   */
-  findRelatedRequests(request) {
-    const results = [];
-    // Device code
-    if (request.deviceCodeCorrelationKey) {
-      this.currentRequests
-        .filter(r => r.id !== request.id && r.deviceCodeCorrelationKey === request.deviceCodeCorrelationKey)
-        .forEach(r => results.push(r));
-    } else if (request.oauthAnalysis && request.oauthAnalysis.clientId) {
-      // OAuth clientId + 60-second window
-      const cid = request.oauthAnalysis.clientId;
-      const ts = request.timestamp || 0;
-      this.currentRequests
-        .filter(r =>
-          r.id !== request.id &&
-          r.oauthAnalysis && r.oauthAnalysis.clientId === cid &&
-          Math.abs((r.timestamp || 0) - ts) <= 60000
-        )
-        .forEach(r => results.push(r));
-    }
-    return results.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-  }
-
-  /**
    * After selecting a request, apply .correlated-highlight to other list items
-   * that are part of the same flow.
+   * that are part of the same flow (see FlowCorrelator.findRelatedRequests).
    */
   highlightCorrelatedRequests(request) {
     // Reset any previous highlights
     document.querySelectorAll('.correlated-highlight').forEach(el => el.classList.remove('correlated-highlight'));
 
-    const related = this.findRelatedRequests(request);
+    const related = FlowCorrelator.findRelatedRequests(request, this.currentRequests);
     if (related.length === 0) return;
 
     related.forEach(r => {
@@ -1041,7 +421,7 @@ class EntraAuthTracerUI {
     const list  = document.getElementById('relatedRequestsList');
     if (!panel || !list) return;
 
-    const related = this.findRelatedRequests(request);
+    const related = FlowCorrelator.findRelatedRequests(request, this.currentRequests);
     const allInFlow = [request, ...related].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
     if (allInFlow.length <= 1) {
@@ -1052,9 +432,9 @@ class EntraAuthTracerUI {
     panel.style.display = 'flex';
     list.innerHTML = allInFlow.map((r, idx) => {
       const isCurrent = r.id === request.id;
-      const stepDesc = this._getFlowStepDesc(r, idx) || r.flowType || '';
+      const stepDesc = FlowCorrelator.getFlowStepDesc(r, idx) || r.flowType || '';
       const statusIcon = r.status === 'completed' ? '✓' : r.status === 'error' ? '✗' : '⧖';
-      return `<span class="related-item${isCurrent ? ' related-current' : ''}" data-request-id="${this.escapeHtml(r.id)}" title="${this.escapeHtml(r.url)}">
+      return `<span class="related-item${isCurrent ? ' related-current' : ''}" data-request-id="${this.escapeHtml(r.id)}" title="${this.escapeHtml(Sanitize.redactUrl(r.url || ''))}">
         ${statusIcon} ${idx + 1}${stepDesc ? ': ' + this.escapeHtml(stepDesc) : ''}
       </span>`;
     }).join('');
@@ -1087,7 +467,8 @@ class EntraAuthTracerUI {
         items.push(this.renderRequestItem(req));
       } catch (err) {
         console.error('renderRequestItem failed:', err, req);
-        items.push(`<div class="request-item error-item" title="${err.message}">&#9888; Error rendering request: ${(req && req.url) ? req.url.substring(0, 80) : '(unknown)'}</div>`);
+        const shortUrl = (req && req.url) ? Sanitize.redactUrl(req.url).substring(0, 80) : '(unknown)';
+        items.push(`<div class="request-item error-item" title="${this.escapeHtml(err.message)}">&#9888; Error rendering request: ${this.escapeHtml(shortUrl)}</div>`);
       }
     }
     container.innerHTML = items.join('');
@@ -1110,24 +491,26 @@ class EntraAuthTracerUI {
    */
   renderRequestItem(request) {
     const time = new Date(request.timestamp || Date.now()).toLocaleTimeString();
+    // Every displayed or copied URL goes through the sanitizer (query secrets redacted)
+    const safeUrl = Sanitize.redactUrl(request.url || '');
     let hostname = '(unknown)';
-    let shortUrl = request.url || '';
+    let shortUrl = safeUrl;
     try {
-      const parsed = new URL(request.url);
+      const parsed = new URL(safeUrl);
       hostname = parsed.hostname;
       shortUrl = parsed.pathname + (parsed.search ? parsed.search.substring(0, 50) : '');
     } catch { /* keep defaults */ }
     const method = request.method || 'GET';
-    const flowCategory = this.getFlowTypeCategory(request.flowType);
+    const flowCategory = FlowCorrelator.getFlowTypeCategory(request.flowType);
     const status = request.status || 'pending';
 
     return `
-      <div class="request-item" data-request-id="${request.id}">
+      <div class="request-item" data-request-id="${this.escapeHtml(request.id)}">
         <span class="col-timestamp">${time}</span>
-        <span class="col-method">${method}</span>
-        <span class="col-url" title="${this.escapeHtml(request.url || '')}">
+        <span class="col-method">${this.escapeHtml(method)}</span>
+        <span class="col-url" title="${this.escapeHtml(safeUrl)}">
           <span class="url-text">${this.escapeHtml(shortUrl || hostname)}</span>
-          ${this.makeCopyBtn(request.url || '', 'Copy URL')}
+          ${this.makeCopyBtn(safeUrl, 'Copy URL')}
         </span>
         <span class="col-status status-${status}">${this.formatStatus(status)}</span>
         <span class="col-flow">
@@ -1215,10 +598,10 @@ class EntraAuthTracerUI {
     const url = new URL(request.url);
     document.getElementById('detailTitle').textContent = `${request.method} ${url.pathname}`;
 
-    // Wire the header copy button to copy the full URL
+    // Wire the header copy button to copy the full (redacted) URL
     const copyUrlBtn = document.getElementById('copyDetailUrlBtn');
     if (copyUrlBtn) {
-      copyUrlBtn.dataset.copy = request.url;
+      copyUrlBtn.dataset.copy = Sanitize.redactUrl(request.url || '');
       copyUrlBtn.style.display = 'inline-flex';
     }
 
@@ -1275,8 +658,8 @@ class EntraAuthTracerUI {
    * Check for CAE capability in request by attempting to decode an available JWT.
    */
   checkForCAE(request) {
-    const jwt = this.extractJwtFromRequest(request) ||
-                this.extractJwtFromRequest(request, 'id_token_hint');
+    const jwt = Sanitize.extractJwtFromRequest(request) ||
+                Sanitize.extractJwtFromRequest(request, 'id_token_hint');
     if (!jwt) return false;
     try {
       const decoded = EntraClaimsDecoder.decodeEntraToken(jwt);
@@ -1293,9 +676,10 @@ class EntraAuthTracerUI {
     const requestDetails = document.getElementById('requestDetails');
     const responseDetails = document.getElementById('responseDetails');
 
-    // Request details
+    // Request details (URL redacted — query-string credentials never reach the DOM or clipboard)
+    const safeUrl = Sanitize.redactUrl(request.url || '');
     const requestCopyText = [
-      `URL: ${request.url}`,
+      `URL: ${safeUrl}`,
       `Method: ${request.method}`,
       `Timestamp: ${new Date(request.timestamp).toISOString()}`,
       `Flow Type: ${request.flowType}`,
@@ -1305,7 +689,7 @@ class EntraAuthTracerUI {
 
     requestDetails.innerHTML = `
       <div class="label">URL:</div>
-      <div class="value">${this.escapeHtml(request.url)}</div>
+      <div class="value">${this.escapeHtml(safeUrl)}</div>
       <div class="label">Method:</div>
       <div class="value">${this.escapeHtml(request.method)}</div>
       <div class="label">Timestamp:</div>
@@ -1349,10 +733,7 @@ class EntraAuthTracerUI {
    */
   isOAuthRequest(request) {
     if (request.oauthAnalysis) return true;
-    const flowType = request.flowType || '';
-    return flowType.includes('pkce') || flowType.includes('oauth') ||
-      flowType.includes('authcode') || flowType === 'client_credentials' ||
-      flowType === 'refresh_token' || flowType.startsWith('device_code');
+    return FlowCorrelator.isOAuthFlow(request.flowType);
   }
 
   /**
@@ -1479,7 +860,7 @@ class EntraAuthTracerUI {
 
     // ── Security warnings ────────────────────────────────────────────────
     if (analysis.warnings && analysis.warnings.length > 0) {
-      html += this.renderOAuthWarnings(analysis.warnings);
+      html += this.renderWarnings(analysis.warnings);
     }
 
     return html;
@@ -1573,19 +954,19 @@ class EntraAuthTracerUI {
   }
 
   /**
-   * Render OAuth security warnings.
+   * Render a list of { rule, severity, message } warnings (OAuth, SAML, JWT, Verified ID).
    */
-  renderOAuthWarnings(warnings) {
+  renderWarnings(warnings, title = 'Security Assessment') {
     const e = (v) => this.escapeHtml(v == null ? '' : String(v));
     const items = warnings.map(w => `
-      <div class="oauth-warning oauth-warning-${w.severity}">
+      <div class="oauth-warning oauth-warning-${e(w.severity)}" ${w.rule ? `data-rule="${e(w.rule)}"` : ''}>
         <span class="oauth-warning-icon">${w.severity === 'error' ? '🔴' : w.severity === 'warning' ? '🟡' : '🔵'}</span>
         <span class="oauth-warning-text">${e(w.message)}</span>
       </div>
     `).join('');
     return `
       <div class="oauth-section">
-        <h5>🛡 Security Assessment</h5>
+        <h5>🛡 ${e(title)}</h5>
         ${items}
       </div>
     `;
@@ -1601,11 +982,11 @@ class EntraAuthTracerUI {
     if (request.fido2Analysis && !request.fido2Analysis.error) {
       fido2Section.style.display = 'block';
       fido2Details.innerHTML = this.renderFido2Details(request.fido2Analysis, request.flowType);
-    } else if (request.flowType.startsWith('fido2_')) {
+    } else if ((request.flowType || '').startsWith('fido2_')) {
       fido2Section.style.display = 'block';
-      fido2Details.innerHTML = request.fido2Analysis?.error ? 
-        `<div class="error">FIDO2 Error: ${request.fido2Analysis.error}</div>` :
-        '<div>No FIDO2 data available for this request</div>';
+      fido2Details.innerHTML = request.fido2Analysis?.error
+        ? `<div class="error">FIDO2 Error: ${this.escapeHtml(request.fido2Analysis.error)}</div>`
+        : '<div>No FIDO2 data available for this request</div>';
     } else {
       fido2Section.style.display = 'none';
     }
@@ -1716,12 +1097,7 @@ class EntraAuthTracerUI {
 
     // Warnings
     if (analysis.warnings && analysis.warnings.length) {
-      const items = analysis.warnings.map(w => `
-        <div class="oauth-warning oauth-warning-${e(w.severity)}">
-          <span class="oauth-warning-icon">${w.severity === 'error' ? '🔴' : w.severity === 'warning' ? '🟡' : '🔵'}</span>
-          <span class="oauth-warning-text">${e(w.message)}</span>
-        </div>`).join('');
-      html += `<div class="oauth-section"><h5>🛡 Notes</h5>${items}</div>`;
+      html += this.renderWarnings(analysis.warnings, 'Notes');
     }
 
     return html;
@@ -1748,11 +1124,11 @@ class EntraAuthTracerUI {
           <h5>📋 Client Data JSON</h5>
           <div class="details-grid">
             <div class="label">Operation Type:</div>
-            <div class="value">${clientData.type}</div>
+            <div class="value">${this.escapeHtml(clientData.type)}</div>
             <div class="label">Origin:</div>
-            <div class="value">${clientData.origin}</div>
+            <div class="value">${this.escapeHtml(clientData.origin)}</div>
             <div class="label">Challenge:</div>
-            <div class="value" title="${clientData.challenge}">${clientData.challenge.substring(0, 40)}...</div>
+            <div class="value" title="${this.escapeHtml(clientData.challenge)}">${this.escapeHtml(String(clientData.challenge || '').substring(0, 40))}...</div>
             <div class="label">Cross Origin:</div>
             <div class="value">${clientData.crossOrigin ? 'Yes' : 'No'}</div>
           </div>
@@ -1770,9 +1146,9 @@ class EntraAuthTracerUI {
           <h5>🔐 Authenticator Data</h5>
           <div class="details-grid">
             <div class="label">RP ID Hash:</div>
-            <div class="value" title="${authData.rpIdHash}">${authData.rpIdHash.substring(0, 40)}...</div>
+            <div class="value" title="${this.escapeHtml(authData.rpIdHash)}">${this.escapeHtml(String(authData.rpIdHash || '').substring(0, 40))}...</div>
             <div class="label">Signature Counter:</div>
-            <div class="value">${authData.signCount}</div>
+            <div class="value">${this.escapeHtml(authData.signCount)}</div>
           </div>
           
           <h6>Authenticator Flags:</h6>
@@ -1782,6 +1158,12 @@ class EntraAuthTracerUI {
             </div>
             <div class="flag-item ${flags.UV ? 'flag-set' : 'flag-unset'}" title="User Verified">
               UV ${flags.UV ? '✓' : '✗'}
+            </div>
+            <div class="flag-item ${flags.BE ? 'flag-set' : 'flag-unset'}" title="Backup Eligible — credential may be synced (passkey)">
+              BE ${flags.BE ? '✓' : '✗'}
+            </div>
+            <div class="flag-item ${flags.BS ? 'flag-set' : 'flag-unset'}" title="Backup State — credential is currently backed up">
+              BS ${flags.BS ? '✓' : '✗'}
             </div>
             <div class="flag-item ${flags.AT ? 'flag-set' : 'flag-unset'}" title="Attested Credential Data">
               AT ${flags.AT ? '✓' : '✗'}
@@ -1796,22 +1178,57 @@ class EntraAuthTracerUI {
       // Attested Credential Data (if AT flag is set)
       if (authData.attestedCredentialData) {
         const credData = authData.attestedCredentialData;
+        const authenticator = credData.authenticator;
+        const authenticatorLabel = authenticator
+          ? `${this.escapeHtml(authenticator.name)}${authenticator.vendor ? ` (${this.escapeHtml(authenticator.vendor)})` : ''}`
+          : 'Unknown authenticator';
         html += `
           <div class="fido2-section">
             <h5>🏷️ Attested Credential Data</h5>
             <div class="details-grid">
               <div class="label">AAGUID:</div>
-              <div class="value">${credData.aaguid}</div>
+              <div class="value mono">${this.escapeHtml(credData.aaguid)}</div>
+              <div class="label">Authenticator:</div>
+              <div class="value">${authenticatorLabel}</div>
               <div class="label">Credential ID Length:</div>
-              <div class="value">${credData.credentialIdLength} bytes</div>
+              <div class="value">${this.escapeHtml(credData.credentialIdLength)} bytes</div>
               <div class="label">Credential ID:</div>
-              <div class="value" title="${credData.credentialId}">${credData.credentialId.substring(0, 40)}...</div>
+              <div class="value" title="${this.escapeHtml(credData.credentialId)}">${this.escapeHtml(String(credData.credentialId).substring(0, 40))}...</div>
             </div>
-            
+
             ${this.renderPublicKeyInfo(credData.credentialPublicKey)}
           </div>
         `;
       }
+
+      // Extensions (if ED flag is set)
+      if (authData.extensions) {
+        html += `
+          <div class="fido2-section">
+            <h5>🧩 Authenticator Extensions</h5>
+            <pre class="cbor-hex">${this.escapeHtml(JSON.stringify(authData.extensions, null, 2))}</pre>
+          </div>
+        `;
+      }
+    }
+
+    // Attestation statement (registration ceremonies)
+    if (fido2Data.attestationObject) {
+      const att = fido2Data.attestationObject;
+      const stmt = att.attStmt || {};
+      html += `
+        <div class="fido2-section">
+          <h5>📜 Attestation Statement</h5>
+          <div class="details-grid">
+            <div class="label">Format:</div>
+            <div class="value">${this.escapeHtml(att.fmt || 'unknown')}</div>
+            ${stmt.algorithmDescription ? `<div class="label">Algorithm:</div><div class="value">${this.escapeHtml(stmt.algorithmDescription)}</div>` : ''}
+            <div class="label">Certificates (x5c):</div>
+            <div class="value">${this.escapeHtml(stmt.x5cCount || 0)}</div>
+            ${stmt.sigHex ? `<div class="label">Signature:</div><div class="value mono" title="${this.escapeHtml(stmt.sigHex)}">${this.escapeHtml(stmt.sigHex.substring(0, 40))}...</div>` : ''}
+          </div>
+        </div>
+      `;
     }
 
     return html;
@@ -1824,21 +1241,21 @@ class EntraAuthTracerUI {
     if (!publicKeyData || publicKeyData.error) {
       return `
         <h6>Public Key:</h6>
-        <div class="error">${publicKeyData?.error || 'No public key data'}</div>
+        <div class="error">${this.escapeHtml(publicKeyData?.error || 'No public key data')}</div>
       `;
     }
 
     let html = '<h6>🔑 Credential Public Key:</h6>';
-    
+
     if (publicKeyData.keyInfo && !publicKeyData.keyInfo.error) {
       const keyInfo = publicKeyData.keyInfo;
-      
+
       html += `
         <div class="details-grid">
           <div class="label">Key Type:</div>
-          <div class="value">${keyInfo.keyTypeDescription}</div>
+          <div class="value">${this.escapeHtml(keyInfo.keyTypeDescription)}</div>
           <div class="label">Algorithm:</div>
-          <div class="value">${keyInfo.algorithmDescription}</div>
+          <div class="value">${this.escapeHtml(keyInfo.algorithmDescription)}</div>
         </div>
       `;
 
@@ -1847,7 +1264,7 @@ class EntraAuthTracerUI {
         html += `
           <div class="details-grid">
             <div class="label">Curve:</div>
-            <div class="value">${keyInfo.parameters.curveDescription}</div>
+            <div class="value">${this.escapeHtml(keyInfo.parameters.curveDescription)}</div>
             <div class="label">Coordinates:</div>
             <div class="value">x: ${keyInfo.parameters.x ? 'Present' : 'Missing'}, y: ${keyInfo.parameters.y ? 'Present' : 'Missing'}</div>
           </div>
@@ -1866,14 +1283,14 @@ class EntraAuthTracerUI {
         `;
       }
     } else {
-      html += `<div class="error">${publicKeyData.keyInfo?.error || 'Unable to parse key information'}</div>`;
+      html += `<div class="error">${this.escapeHtml(publicKeyData.keyInfo?.error || 'Unable to parse key information')}</div>`;
     }
 
     // CBOR raw data (collapsible)
     html += `
       <details class="cbor-details">
-        <summary>Raw CBOR Data (${publicKeyData.size} bytes)</summary>
-        <pre class="cbor-hex">${publicKeyData.hex}</pre>
+        <summary>Raw CBOR Data (${this.escapeHtml(publicKeyData.size)} bytes)</summary>
+        <pre class="cbor-hex">${this.escapeHtml(publicKeyData.hex)}</pre>
       </details>
     `;
 
@@ -1905,14 +1322,14 @@ class EntraAuthTracerUI {
     const params = Array.from(url.searchParams.entries());
 
     const urlParamsCopyText = params.length > 0
-      ? params.map(([k, v]) => `${k}: ${this.redactSensitiveValues(k, v)}`).join('\n')
+      ? params.map(([k, v]) => `${k}: ${Sanitize.redactSensitiveValues(k, v)}`).join('\n')
       : 'No URL parameters';
     this.setSectionHeader('urlParamsSectionHeader', 'URL Parameters', urlParamsCopyText);
 
     if (params.length > 0) {
       urlParameters.innerHTML = params.map(([key, value]) => `
         <div class="param-name">${this.escapeHtml(key)}:</div>
-        <div class="param-value">${this.escapeHtml(this.redactSensitiveValues(key, value))}</div>
+        <div class="param-value">${this.escapeHtml(Sanitize.redactSensitiveValues(key, value))}</div>
       `).join('');
     } else {
       urlParameters.innerHTML = '<div class="param-value">No URL parameters</div>';
@@ -1997,41 +1414,36 @@ class EntraAuthTracerUI {
   requestBodyAsText(body) {
     if (body.type === 'formData') {
       return Object.entries(body.data)
-        .map(([k, values]) => `${k}: ${this.redactSensitiveValues(k, values[0])}`)
+        .map(([k, values]) => `${k}: ${Sanitize.redactSensitiveValues(k, Array.isArray(values) ? values[0] : values)}`)
         .join('\n');
     } else if (body.type === 'json') {
-      return JSON.stringify(body.data, null, 2);
+      return JSON.stringify(Sanitize.redactObject(body.data), null, 2);
     }
-    return String(body.data);
+    // Raw text: shown only after structured redaction (or replaced by a placeholder)
+    return String(Sanitize.redactBody(body).data);
   }
 
   /**
-   * Render request body
+   * Render request body — every value is redacted and HTML-escaped.
    */
   renderRequestBody(body) {
     if (body.type === 'formData') {
       return Object.entries(body.data).map(([key, values]) => `
-        <div class="param-name">${key}:</div>
-        <div class="param-value">${this.redactSensitiveValues(key, values[0])}</div>
+        <div class="param-name">${this.escapeHtml(key)}:</div>
+        <div class="param-value">${this.escapeHtml(Sanitize.redactSensitiveValues(key, Array.isArray(values) ? values[0] : values))}</div>
       `).join('');
     } else if (body.type === 'json') {
-      return `<div class="param-value"><pre>${JSON.stringify(body.data, null, 2)}</pre></div>`;
+      return `<div class="param-value"><pre>${this.escapeHtml(JSON.stringify(Sanitize.redactObject(body.data), null, 2))}</pre></div>`;
     } else {
-      return `<div class="param-value">${body.data}</div>`;
+      return `<div class="param-value">${this.escapeHtml(Sanitize.redactBody(body).data)}</div>`;
     }
   }
 
   /**
-   * Escape a value for safe insertion into HTML.
+   * Escape a value for safe insertion into HTML (delegates to Sanitize).
    */
   escapeHtml(text) {
-    if (text == null) return '';
-    return String(text)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    return Sanitize.escapeHtml(text);
   }
 
   /**
@@ -2146,6 +1558,11 @@ class EntraAuthTracerUI {
       </div>`;
     }
 
+    // Security assessment (signatures, status, validity window, audience)
+    if (decoded.warnings && decoded.warnings.length > 0) {
+      html += this.renderWarnings(decoded.warnings);
+    }
+
     // Raw XML (collapsible)
     html += `<details class="saml-xml-details">
       <summary>Raw XML (${e(decoded.binding)} binding)</summary>
@@ -2153,19 +1570,6 @@ class EntraAuthTracerUI {
     </details>`;
 
     return html;
-  }
-
-  /**
-   * Redact sensitive values
-   */
-  redactSensitiveValues(key, value) {
-    const sensitiveKeys = ['client_secret', 'password', 'refresh_token'];
-    
-    if (sensitiveKeys.some(k => key.toLowerCase().includes(k))) {
-      return '[REDACTED]';
-    }
-    
-    return String(value).substring(0, 200) + (value.length > 200 ? '...' : '');
   }
 
   /**
@@ -2274,9 +1678,9 @@ class EntraAuthTracerUI {
     // Attempt to decode any JWT travelling in request parameters:
     // client_assertion (client credentials / auth code), id_token_hint (authorize)
     const jwtSource = (analysis && analysis.clientAssertion && !analysis.clientAssertion.error)
-      ? { jwt: this.extractJwtFromRequest(request), label: 'client_assertion' }
+      ? { jwt: Sanitize.extractJwtFromRequest(request), label: 'client_assertion' }
       : (analysis && analysis.idTokenHint && !analysis.idTokenHint.error)
-        ? { jwt: this.extractJwtFromRequest(request, 'id_token_hint'), label: 'id_token_hint' }
+        ? { jwt: Sanitize.extractJwtFromRequest(request, 'id_token_hint'), label: 'id_token_hint' }
         : null;
 
     if (jwtSource && jwtSource.jwt) {
@@ -2295,24 +1699,6 @@ class EntraAuthTracerUI {
 
     entraClaims.innerHTML = '<div class="empty-state">JWT claims are decoded from <strong>client_assertion</strong> or <strong>id_token_hint</strong> parameters when present in the captured request.</div>';
     this.setSectionHeader('entraClaimsSectionHeader', 'JWT Claims', '');
-  }
-
-  /**
-   * Extract a JWT string from known request parameters.
-   */
-  extractJwtFromRequest(request, paramName = 'client_assertion') {
-    // Check request body (form data)
-    if (request.requestBody && request.requestBody.type === 'formData') {
-      const vals = request.requestBody.data[paramName];
-      if (vals) return Array.isArray(vals) ? vals[0] : vals;
-    }
-    // Check URL params
-    try {
-      const url = new URL(request.url);
-      const val = url.searchParams.get(paramName);
-      if (val) return val;
-    } catch { /* ignore */ }
-    return null;
   }
 
   /**
@@ -2345,7 +1731,7 @@ class EntraAuthTracerUI {
 
     // Warnings
     if (decoded.warnings && decoded.warnings.length > 0) {
-      html += this.renderOAuthWarnings(decoded.warnings);
+      html += this.renderWarnings(decoded.warnings);
     }
 
     // Claims table
@@ -2430,19 +1816,15 @@ class EntraAuthTracerUI {
       return;
     }
 
-    const catLabels = { saml: 'SAML', oauth: 'OAuth', fido2: 'FIDO2', device_code: 'Device Code' };
-    const flowCounts = {};
-    let errorCount = 0;
-    for (const r of this.currentRequests) {
-      const cat = this.getFlowTypeCategory(r.flowType);
-      if (catLabels[cat]) flowCounts[cat] = (flowCounts[cat] || 0) + 1;
-      if (r.status === 'error') errorCount++;
-    }
+    const { total, byCategory, errors } = FlowCorrelator.countByCategory(this.currentRequests);
 
-    const parts = [`${this.currentRequests.length} req`];
-    const breakdown = Object.entries(flowCounts).map(([k, v]) => `${catLabels[k]}: ${v}`).join(', ');
+    const parts = [`${total} req`];
+    const breakdown = FlowCorrelator.CATEGORIES
+      .filter(cat => cat !== 'other' && byCategory[cat])
+      .map(cat => `${FlowCorrelator.CATEGORY_LABELS[cat]}: ${byCategory[cat]}`)
+      .join(', ');
     if (breakdown) parts.push(breakdown);
-    if (errorCount) parts.push(`${errorCount} error${errorCount !== 1 ? 's' : ''}`);
+    if (errors) parts.push(`${errors} error${errors !== 1 ? 's' : ''}`);
 
     requestCount.textContent = parts.join(' · ');
   }
@@ -2604,7 +1986,6 @@ class EntraAuthTracerUI {
 
 }
 
-// Initialize UI when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-  new EntraAuthTracerUI();
-});
+// The popup is bootstrapped by src/ui.main.js; exporting the class keeps this
+// module side-effect free so it can be exercised under jsdom.
+export default EntraAuthTracerUI;

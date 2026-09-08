@@ -3,6 +3,10 @@
  */
 
 import Fido2Decoder from '../src/Fido2Decoder.js';
+import {
+  b64url, bytes, cborEncode, coseEc2P256Key, coseRsaKey,
+  buildAuthenticatorData, buildAttestationObject
+} from './helpers.js';
 
 describe('Fido2Decoder', () => {
   describe('base64urlDecode', () => {
@@ -134,6 +138,7 @@ describe('Fido2Decoder', () => {
       const result = Fido2Decoder.decodeFido2Request(requestBody);
       expect(result).toBe(null);
     });
+  });
 
   describe('decodeCBORPublicKey', () => {
     // Note: This test uses mock CBOR data since we can't easily create real CBOR in tests
@@ -255,7 +260,6 @@ describe('Fido2Decoder', () => {
       expect(Fido2Decoder.getCurveDescription(999)).toBe('Unknown (999)');
     });
   });
-  }); // closes the improperly-nested decodeFido2Request describe
 
   // ─── Additional coverage tests ───────────────────────────────────────────
 
@@ -365,6 +369,245 @@ describe('Fido2Decoder', () => {
       expect(result.error).toBeNull();
       expect(result.decoded).toBeDefined();
       expect(result.keyInfo).toBeDefined();
+    });
+  });
+
+  // ─── WebAuthn L3 flags: BE / BS ───────────────────────────────────────────
+
+  describe('parseFlags — backup eligibility and state (WebAuthn L3)', () => {
+    it('decodes BE (0x08) and BS (0x10)', () => {
+      expect(Fido2Decoder.parseFlags(0x08).BE).toBe(true);
+      expect(Fido2Decoder.parseFlags(0x08).BS).toBe(false);
+      expect(Fido2Decoder.parseFlags(0x10).BS).toBe(true);
+      expect(Fido2Decoder.parseFlags(0x10).BE).toBe(false);
+    });
+
+    it('0x1d sets UP, UV, BE and BS — a synced passkey assertion', () => {
+      const flags = Fido2Decoder.parseFlags(0x1d);
+      expect(flags).toMatchObject({ UP: true, UV: true, BE: true, BS: true, AT: false, ED: false });
+    });
+
+    it('exposes only the reserved bits that are still reserved (RFU1, RFU4)', () => {
+      const flags = Fido2Decoder.parseFlags(0x22);
+      expect(flags.RFU1).toBe(true);
+      expect(flags.RFU4).toBe(true);
+      expect(flags).not.toHaveProperty('RFU2');
+      expect(flags).not.toHaveProperty('RFU3');
+    });
+  });
+
+  // ─── Real authenticatorData built with cbor-web ────────────────────────────
+
+  describe('decodeAuthenticatorData — real COSE keys and extensions', () => {
+    it('reads the big-endian signCount', () => {
+      const { b64url: ad } = buildAuthenticatorData({ signCount: 0x00000102 });
+      expect(Fido2Decoder.decodeAuthenticatorData(ad).signCount).toBe(258);
+    });
+
+    it('reads the maximum uint32 signCount', () => {
+      const { b64url: ad } = buildAuthenticatorData({ signCount: 0xffffffff });
+      expect(Fido2Decoder.decodeAuthenticatorData(ad).signCount).toBe(4294967295);
+    });
+
+    it('decodes a real EC2 P-256 COSE key (integer-keyed Map) into keyInfo', () => {
+      const { b64url: ad } = buildAuthenticatorData({ flags: { UP: true, UV: true, AT: true }, coseKey: coseEc2P256Key() });
+      const result = Fido2Decoder.decodeAuthenticatorData(ad);
+      const keyInfo = result.attestedCredentialData.credentialPublicKey.keyInfo;
+      expect(keyInfo.keyType).toBe(2);
+      expect(keyInfo.algorithm).toBe(-7);
+      expect(keyInfo.keyTypeDescription).toMatch(/^EC2/);
+      expect(keyInfo.algorithmDescription).toMatch(/^ES256/);
+      expect(keyInfo.parameters.curve).toBe(1);
+      expect(keyInfo.parameters.curveDescription).toMatch(/P-256/);
+      expect(keyInfo.parameters.x).toBe('11'.repeat(32));
+      expect(keyInfo.parameters.y).toBe('22'.repeat(32));
+    });
+
+    it('decodes a real RSA COSE key into keyInfo', () => {
+      const { b64url: ad } = buildAuthenticatorData({ flags: { UP: true, AT: true }, coseKey: coseRsaKey() });
+      const keyInfo = Fido2Decoder.decodeAuthenticatorData(ad).attestedCredentialData.credentialPublicKey.keyInfo;
+      expect(keyInfo.keyType).toBe(3);
+      expect(keyInfo.algorithm).toBe(-257);
+      expect(keyInfo.algorithmDescription).toMatch(/^RS256/);
+      expect(keyInfo.parameters.n).toHaveLength(512);
+      expect(keyInfo.parameters.e).toBe('010001');
+    });
+
+    it('exposes the decoded COSE map with string keys and hex byte strings', () => {
+      const { b64url: ad } = buildAuthenticatorData({ coseKey: coseEc2P256Key() });
+      const decoded = Fido2Decoder.decodeAuthenticatorData(ad).attestedCredentialData.credentialPublicKey.decoded;
+      expect(decoded['1']).toBe(2);
+      expect(decoded['3']).toBe(-7);
+      expect(decoded['-2']).toBe('11'.repeat(32));
+    });
+
+    it('sizes the public key by the bytes the CBOR item consumed, not the remaining buffer', () => {
+      const key = coseEc2P256Key();
+      const { b64url: ad } = buildAuthenticatorData({ coseKey: key, extensions: { credProtect: 2 } });
+      const pk = Fido2Decoder.decodeAuthenticatorData(ad).attestedCredentialData.credentialPublicKey;
+      expect(pk.size).toBe(cborEncode(key).length);
+      expect(pk.hex).toHaveLength(pk.size * 2);
+      expect(pk.error).toBeNull();
+    });
+
+    it('decodes extensions that follow the credential public key when ED is set', () => {
+      const { b64url: ad } = buildAuthenticatorData({ coseKey: coseEc2P256Key(), extensions: { credProtect: 2, minPinLength: 6 } });
+      const result = Fido2Decoder.decodeAuthenticatorData(ad);
+      expect(result.flags.AT).toBe(true);
+      expect(result.flags.ED).toBe(true);
+      expect(result.extensions).toEqual({ credProtect: 2, minPinLength: 6 });
+      expect(result.attestedCredentialData.credentialPublicKey.keyInfo.keyType).toBe(2);
+    });
+
+    it('decodes extensions directly after the header when ED is set without AT', () => {
+      const { b64url: ad } = buildAuthenticatorData({ flags: { UP: true, ED: true }, extensions: { credProtect: 1 } });
+      const result = Fido2Decoder.decodeAuthenticatorData(ad);
+      expect(result.attestedCredentialData).toBeNull();
+      expect(result.extensions).toEqual({ credProtect: 1 });
+    });
+
+    it('records the credential id and its declared length', () => {
+      const credId = bytes(20, 0xcd);
+      const { b64url: ad } = buildAuthenticatorData({ coseKey: coseEc2P256Key(), credId });
+      const attested = Fido2Decoder.decodeAuthenticatorData(ad).attestedCredentialData;
+      expect(attested.credentialIdLength).toBe(20);
+      expect(attested.credentialId).toBe('cd'.repeat(20));
+    });
+
+    it('labels a known AAGUID with its authenticator name and vendor', () => {
+      const { b64url: ad } = buildAuthenticatorData({ coseKey: coseEc2P256Key(), aaguid: 'ee882879-721c-4913-9775-3dfcce97072a' });
+      const attested = Fido2Decoder.decodeAuthenticatorData(ad).attestedCredentialData;
+      expect(attested.aaguid).toBe('ee882879-721c-4913-9775-3dfcce97072a');
+      expect(attested.authenticator.vendor).toBe('Yubico');
+      expect(attested.authenticator.name).toMatch(/YubiKey 5/);
+    });
+
+    it('reports a zero AAGUID as not provided', () => {
+      const { b64url: ad } = buildAuthenticatorData({ coseKey: coseEc2P256Key() });
+      const attested = Fido2Decoder.decodeAuthenticatorData(ad).attestedCredentialData;
+      expect(attested.authenticator.name).toMatch(/Not provided/);
+      expect(attested.authenticator.kind).toBe('unknown');
+    });
+
+    it('rejects authenticatorData whose AT flag is set but no attested credential bytes follow', () => {
+      const header = buildAuthenticatorData({ flags: { UP: true, AT: true } }).bytes.subarray(0, 37);
+      expect(() => Fido2Decoder.decodeAuthenticatorData(b64url(header))).toThrow(/attested credential data too short/);
+    });
+
+    it('records an extension decoding error when ED is set but no extension bytes follow', () => {
+      const header = buildAuthenticatorData({ flags: { UP: true, ED: true } }).bytes.subarray(0, 37);
+      const result = Fido2Decoder.decodeAuthenticatorData(b64url(header));
+      expect(result.flags.ED).toBe(true);
+      expect(result.extensions).toEqual({ error: expect.stringMatching(/Extension decoding failed/) });
+    });
+
+    it('surfaces inconsistent flags as a request-level error rather than a silent null', () => {
+      const header = buildAuthenticatorData({ flags: { UP: true, AT: true } }).bytes.subarray(0, 37);
+      const result = Fido2Decoder.decodeFido2Request({ type: 'json', data: { authenticatorData: b64url(header) } });
+      expect(result.authenticatorData).toBeNull();
+      expect(result.error).toMatch(/attested credential data too short/);
+    });
+
+    it('rejects a credential id longer than the buffer', () => {
+      // AAGUID (16 zero bytes) + declared length 0x0100 but no credential bytes follow
+      const attested = new Uint8Array([...bytes(16), 0x01, 0x00]);
+      const header = buildAuthenticatorData({ flags: { UP: true, AT: true } }).bytes.subarray(0, 37);
+      const ad = b64url(new Uint8Array([...header, ...attested]));
+      expect(() => Fido2Decoder.decodeAuthenticatorData(ad)).toThrow(/credential ID exceeds buffer/);
+    });
+  });
+
+  describe('parseKeyInfo — input shapes', () => {
+    it('reads integer keys from a Map (what cbor-web returns)', () => {
+      const keyInfo = Fido2Decoder.parseKeyInfo(coseEc2P256Key());
+      expect(keyInfo.keyType).toBe(2);
+      expect(keyInfo.parameters.curve).toBe(1);
+    });
+
+    it('describes an OKP / Ed25519 key', () => {
+      const keyInfo = Fido2Decoder.parseKeyInfo(new Map([[1, 1], [3, -8], [-1, 6], [-2, bytes(32, 0x44)]]));
+      expect(keyInfo.keyTypeDescription).toMatch(/^OKP/);
+      expect(keyInfo.algorithmDescription).toMatch(/^EdDSA/);
+      expect(keyInfo.parameters.curveDescription).toMatch(/Ed25519/);
+      expect(keyInfo.parameters.x).toBe('44'.repeat(32));
+    });
+  });
+
+  describe('lookupAAGUID', () => {
+    it('returns name, vendor and kind for a known AAGUID', () => {
+      const hit = Fido2Decoder.lookupAAGUID('08987058-cadc-4b81-b6e1-30de50dcbe96');
+      expect(hit).toEqual(expect.objectContaining({ vendor: 'Microsoft', kind: 'platform' }));
+      expect(hit.name).toMatch(/Windows Hello/);
+    });
+
+    it('is case-insensitive', () => {
+      expect(Fido2Decoder.lookupAAGUID('EA9B8D66-4D01-1D21-3CE4-B6B48CB575D4').name).toMatch(/Google Password Manager/);
+    });
+
+    it('returns null for an unknown AAGUID and for empty input', () => {
+      expect(Fido2Decoder.lookupAAGUID('12345678-1234-1234-1234-123456789abc')).toBeNull();
+      expect(Fido2Decoder.lookupAAGUID(null)).toBeNull();
+    });
+  });
+
+  // ─── Attestation objects ──────────────────────────────────────────────────
+
+  describe('decodeAttestationObject', () => {
+    it('decodes fmt, attStmt and the embedded authData of a packed attestation', () => {
+      const authData = buildAuthenticatorData({ flags: { UP: true, UV: true, AT: true }, coseKey: coseEc2P256Key(), aaguid: 'd8522d9f-575b-4866-88a9-ba99fa02f35b' }).bytes;
+      const { b64url: att } = buildAttestationObject({ fmt: 'packed', attStmt: { alg: -7, sig: bytes(64, 0x5a), x5c: [bytes(10, 0x30)] }, authDataBytes: authData });
+      const result = Fido2Decoder.decodeAttestationObject(att);
+      expect(result.fmt).toBe('packed');
+      expect(result.attStmt.alg).toBe(-7);
+      expect(result.attStmt.algorithmDescription).toMatch(/ES256/);
+      expect(result.attStmt.sigHex).toBe('5a'.repeat(64));
+      expect(result.attStmt.x5cCount).toBe(1);
+      expect(result.authData.flags.AT).toBe(true);
+      expect(result.authData.attestedCredentialData.authenticator.name).toMatch(/YubiKey Bio/);
+    });
+
+    it('handles a "none" attestation with an empty statement', () => {
+      const { b64url: att } = buildAttestationObject({ fmt: 'none', attStmt: {} });
+      const result = Fido2Decoder.decodeAttestationObject(att);
+      expect(result.fmt).toBe('none');
+      expect(result.attStmt).toEqual({ alg: null, algorithmDescription: null, sigHex: null, x5cCount: 0 });
+      expect(result.authData.flags.UV).toBe(true);
+    });
+
+    it('wraps CBOR failures in a descriptive error', () => {
+      expect(() => Fido2Decoder.decodeAttestationObject(b64url(new Uint8Array([0xff, 0xff]))))
+        .toThrow(/Failed to decode attestationObject/);
+    });
+  });
+
+  describe('decodeFido2Request — registration and PublicKeyCredential JSON', () => {
+    it('reads nested response.{clientDataJSON, attestationObject} and mirrors authData', () => {
+      const clientData = b64url(JSON.stringify({ type: 'webauthn.create', challenge: 'c', origin: 'https://login.microsoftonline.com' }));
+      const { b64url: att } = buildAttestationObject({ fmt: 'packed' });
+      const result = Fido2Decoder.decodeFido2Request({
+        type: 'json',
+        data: { id: 'cred', rawId: 'cred', type: 'public-key', response: { clientDataJSON: clientData, attestationObject: att } }
+      });
+      expect(result.error).toBeNull();
+      expect(result.clientDataJSON.type).toBe('webauthn.create');
+      expect(result.attestationObject.fmt).toBe('packed');
+      expect(result.authenticatorData.flags.AT).toBe(true);
+      expect(result.authenticatorData.attestedCredentialData.credentialPublicKey.keyInfo.keyType).toBe(2);
+    });
+
+    it('prefers an explicit authenticatorData over the attestation copy', () => {
+      const { b64url: att } = buildAttestationObject();
+      const { b64url: ad } = buildAuthenticatorData({ flags: { UP: true }, signCount: 7 });
+      const result = Fido2Decoder.decodeFido2Request({ type: 'json', data: { authenticatorData: ad, attestationObject: att } });
+      expect(result.authenticatorData.signCount).toBe(7);
+      expect(result.authenticatorData.flags.AT).toBe(false);
+    });
+  });
+
+  describe('cborToPlain', () => {
+    it('converts Maps with integer keys, byte strings and nested arrays', () => {
+      const plain = Fido2Decoder.cborToPlain(new Map([[1, bytes(2, 0xab)], [-1, [new Map([['k', 'v']])]]]));
+      expect(plain).toEqual({ '1': 'abab', '-1': [{ k: 'v' }] });
     });
   });
 });

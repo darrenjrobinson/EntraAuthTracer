@@ -136,6 +136,7 @@ class OAuthDecoder {
     const domainHint     = searchParams.get('domain_hint');
     const responseMode   = searchParams.get('response_mode');
     const idTokenHint    = searchParams.get('id_token_hint');
+    const redirectUri    = searchParams.get('redirect_uri');
 
     const isPKCE     = !!codeChallenge;
     const isImplicit = responseType.includes('token') && !responseType.includes('code');
@@ -160,6 +161,7 @@ class OAuthDecoder {
       label,
       responseType,
       clientId,
+      redirectUri,
       state,
       nonce,
       prompt,
@@ -186,7 +188,7 @@ class OAuthDecoder {
         requestType: 'token_request',
         grantType: grantType || 'unknown',
         label: 'Token Request (no body)',
-        warnings: [{ severity: 'warning', message: 'Token request has no body — grant_type cannot be determined' }]
+        warnings: [{ rule: 'token_request_no_body', severity: 'warning', message: 'Token request has no body — grant_type cannot be determined' }]
       };
     }
 
@@ -209,6 +211,8 @@ class OAuthDecoder {
         return this.analyzeDeviceCodePoll(data);
       case 'refresh_token':
         return this.analyzeRefreshToken(data);
+      case 'password':
+        return this.analyzeRopc(data);
       default:
         return {
           requestType: 'token_request',
@@ -216,7 +220,7 @@ class OAuthDecoder {
           label: data.grant_type ? `Token Request (${data.grant_type})` : 'Token Request (unknown grant)',
           warnings: data.grant_type
             ? []
-            : [{ severity: 'warning', message: 'Missing grant_type in token request body' }]
+            : [{ rule: 'grant_type_missing', severity: 'warning', message: 'Missing grant_type in token request body' }]
         };
     }
   }
@@ -326,6 +330,61 @@ class OAuthDecoder {
     };
   }
 
+  /**
+   * Resource Owner Password Credentials (RFC 6749 §4.3) — removed in OAuth 2.1
+   * but still seen from legacy scripts and service accounts. The username and
+   * password values are never returned; only their presence (and the username's
+   * domain) is reported.
+   */
+  static analyzeRopc(data) {
+    const scopes = data.scope ? data.scope.split(' ').filter(Boolean) : [];
+    const username = typeof data.username === 'string' ? data.username : null;
+    const usernameDomain = username && username.includes('@') ? username.split('@').pop() : null;
+
+    let authMethod, authMethodLabel;
+    if (data.client_assertion) {
+      authMethod = 'client_assertion';
+      authMethodLabel = 'Client Assertion (JWT)';
+    } else if (data.client_secret) {
+      authMethod = 'client_secret_post';
+      authMethodLabel = 'Client Secret POST (password credential in body)';
+    } else {
+      authMethod = 'public';
+      authMethodLabel = 'No client credential (public client)';
+    }
+
+    const warnings = [{
+      rule: 'ropc_deprecated',
+      severity: 'error',
+      message: 'Resource Owner Password Credentials (ROPC) grant is removed in OAuth 2.1 — the client handles the user password directly and cannot satisfy MFA or Conditional Access; migrate to Authorization Code + PKCE or Device Code'
+    }];
+    if (data.client_secret) {
+      warnings.push({
+        rule: 'client_auth_secret_post',
+        severity: 'info',
+        message: 'Using client_secret in POST body (client_secret_post) — consider client_secret_basic or certificate-based authentication'
+      });
+    }
+
+    return {
+      requestType: 'token_request',
+      grantType: 'password',
+      label: this.GRANT_TYPES.password.label,
+      clientId: data.client_id || null,
+      usernamePresent: !!username,
+      usernameDomain,
+      passwordPresent: !!data.password,
+      authMethod,
+      authMethodLabel,
+      clientAssertion: data.client_assertion
+        ? this.analyzeClientAssertion(data.client_assertion, data.client_assertion_type)
+        : null,
+      scopes,
+      scopeLabels: this.labelScopes(scopes),
+      warnings
+    };
+  }
+
   // ─── PKCE analysis ─────────────────────────────────────────────────────────
 
   /**
@@ -410,33 +469,44 @@ class OAuthDecoder {
 
   // ─── Warning generators ────────────────────────────────────────────────────
 
+  /*
+   * Every warning carries a stable `rule` identifier alongside the human-readable
+   * message so consumers (UI filters, exports, tests, tool surfaces) can key on
+   * the finding rather than on message text.
+   */
+
   static generateAuthorizationWarnings(params, responseType, isPKCE) {
     const warnings = [];
 
     if (!isPKCE && responseType.includes('code')) {
       warnings.push({
+        rule: 'pkce_missing',
         severity: 'warning',
         message: 'Authorization Code request without PKCE — code_challenge is required for public clients in OAuth 2.1'
       });
     }
     if (!params.get('state')) {
       warnings.push({
+        rule: 'state_missing',
         severity: 'warning',
         message: 'No state parameter — CSRF protection may be absent'
       });
     }
     if (responseType.includes('token') && !responseType.includes('code')) {
       warnings.push({
+        rule: 'implicit_flow',
         severity: 'error',
         message: 'Implicit flow (response_type includes token) is removed in OAuth 2.1 — migrate to Authorization Code + PKCE'
       });
     }
     if (params.get('code_challenge_method') && params.get('code_challenge_method') !== 'S256') {
       warnings.push({
+        rule: 'pkce_method_not_s256',
         severity: 'warning',
         message: `code_challenge_method=${params.get('code_challenge_method')} — S256 is the required method in OAuth 2.1`
       });
     }
+    warnings.push(...this.assessRedirectUri(params.get('redirect_uri')));
     return warnings;
   }
 
@@ -444,10 +514,12 @@ class OAuthDecoder {
     const warnings = [];
     if (!hasPKCE) {
       warnings.push({
+        rule: 'pkce_verifier_missing',
         severity: 'info',
         message: 'Token exchange without code_verifier — PKCE is required for public clients in OAuth 2.1'
       });
     }
+    warnings.push(...this.assessRedirectUri(data.redirect_uri));
     return warnings;
   }
 
@@ -455,26 +527,90 @@ class OAuthDecoder {
     const warnings = [];
     if (authMethod === 'client_secret_post') {
       warnings.push({
+        rule: 'client_auth_secret_post',
         severity: 'info',
         message: 'Using client_secret in POST body (client_secret_post) — consider client_secret_basic or certificate-based authentication'
       });
     } else if (authMethod === 'client_secret_basic') {
       warnings.push({
+        rule: 'client_auth_secret_basic',
         severity: 'info',
         message: 'Using HTTP Basic authentication (client_secret_basic) — consider certificate-based or federated credential authentication for improved security'
       });
     } else if (authMethod === 'digest_auth') {
       warnings.push({
+        rule: 'client_auth_digest',
         severity: 'info',
         message: 'Using HTTP Digest authentication with OAuth — non-standard; most modern IdPs use client_secret_basic or client_assertion'
       });
     } else if (data.client_secret) {
       warnings.push({
+        rule: 'client_auth_secret',
         severity: 'info',
         message: 'Using client_secret — consider certificate-based or federated credential authentication for improved security'
       });
     }
     return warnings;
+  }
+
+  /**
+   * Assess a redirect_uri against RFC 6749 §3.1.2, RFC 8252 §7 and OAuth 2.1.
+   * Returns an array containing zero or one warning.
+   */
+  static assessRedirectUri(uri) {
+    if (!uri) return [];
+
+    if (uri === 'urn:ietf:wg:oauth:2.0:oob' || uri === 'urn:ietf:wg:oauth:2.0:oob:auto') {
+      return [{
+        rule: 'redirect_uri_oob',
+        severity: 'warning',
+        message: 'redirect_uri uses the out-of-band (oob) URN — deprecated and not permitted in OAuth 2.1; use a loopback or claimed https redirect'
+      }];
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(uri);
+    } catch {
+      return [{
+        rule: 'redirect_uri_invalid',
+        severity: 'warning',
+        message: `redirect_uri is not a valid absolute URI (${String(uri).substring(0, 80)})`
+      }];
+    }
+
+    if (parsed.hash) {
+      return [{
+        rule: 'redirect_uri_fragment',
+        severity: 'warning',
+        message: `redirect_uri contains a fragment (${parsed.hash.substring(0, 40)}) — RFC 6749 §3.1.2 forbids fragment components in the redirection endpoint URI`
+      }];
+    }
+
+    if (parsed.protocol === 'https:') return [];
+
+    if (parsed.protocol === 'http:') {
+      const host = parsed.hostname;
+      const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.localhost');
+      if (isLoopback) {
+        return [{
+          rule: 'redirect_uri_loopback_http',
+          severity: 'info',
+          message: `redirect_uri uses a loopback http address (${host}) — acceptable for native apps per RFC 8252 §7.3, not for web applications`
+        }];
+      }
+      return [{
+        rule: 'redirect_uri_http',
+        severity: 'warning',
+        message: `redirect_uri uses plain http (${host}) — the authorization code is exposed in transit; OAuth 2.1 requires https for non-loopback redirects`
+      }];
+    }
+
+    return [{
+      rule: 'redirect_uri_custom_scheme',
+      severity: 'info',
+      message: `redirect_uri uses a private-use scheme (${parsed.protocol}) — native-app redirect; make sure the scheme is unique to this app (RFC 8252 §7.1)`
+    }];
   }
 
   // ─── Scope labelling ───────────────────────────────────────────────────────
@@ -528,6 +664,8 @@ class OAuthDecoder {
         return 'device_code_poll';
       case 'refresh_token':
         return 'refresh_token';
+      case 'password':
+        return 'ropc';
       default:
         return null;
     }
@@ -636,19 +774,20 @@ class OAuthDecoder {
       analysis.digestAuth = parsed.digestParams;
     }
 
-    // Replace or add the auth-method warning
+    // Replace the client-authentication warning now that the real method is known.
     if (analysis.warnings) {
-      // Remove any existing client_secret / auth-method warning
       analysis.warnings = analysis.warnings.filter(
-        w => !w.message.includes('client_secret') && !w.message.includes('authentication')
+        w => !(w.rule && w.rule.startsWith('client_auth_'))
       );
       if (parsed.scheme === 'client_secret_basic') {
         analysis.warnings.push({
+          rule: 'client_auth_secret_basic',
           severity: 'info',
           message: 'Using HTTP Basic authentication (client_secret_basic) — consider certificate-based or federated credential authentication'
         });
       } else if (parsed.scheme === 'digest_auth') {
         analysis.warnings.push({
+          rule: 'client_auth_digest',
           severity: 'info',
           message: `HTTP Digest authentication detected (realm: ${parsed.digestParams.realm || 'unknown'}, algorithm: ${parsed.digestParams.algorithm}) — non-standard with OAuth; used by SAP Integration Suite, Dell Boomi, and some enterprise gateway products`
         });

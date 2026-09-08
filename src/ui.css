@@ -415,6 +415,8 @@ body {
 .flow-oauth { background-color: #e6f7e6; color: var(--success-green); }
 .flow-fido2 { background-color: #f3e6ff; color: #5c2d91; }
 .flow-device_code { background-color: #fff3e6; color: var(--warning-orange); }
+.flow-did { background-color: #e6fbf7; color: #008272; }
+.flow-other { background-color: #f3f2f1; color: #605e5c; }
 
 /* Status indicators */
 .status-completed { color: var(--success-green); }

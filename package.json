@@ -1,16 +1,16 @@
 {
   "name": "entra-auth-tracer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Browser extension for deep inspection of Microsoft Entra authentication and identity traffic",
   "author": "Darren J Robinson",
   "license": "BSD-2-Clause",
-  "homepage": "https://github.com/DarrenRobinson/EntraAuthTracer",
+  "homepage": "https://github.com/darrenjrobinson/EntraAuthTracer",
   "repository": {
     "type": "git",
-    "url": "https://github.com/DarrenRobinson/EntraAuthTracer.git"
+    "url": "https://github.com/darrenjrobinson/EntraAuthTracer.git"
   },
   "bugs": {
-    "url": "https://github.com/DarrenRobinson/EntraAuthTracer/issues"
+    "url": "https://github.com/darrenjrobinson/EntraAuthTracer/issues"
   },
   "keywords": [
     "entra",
@@ -30,7 +30,7 @@
     "debugging"
   ],
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   },
   "scripts": {
     "build": "npm run generate-icons && webpack --mode production",
@@ -38,8 +38,8 @@
     "dev": "webpack --mode development --watch",
     "test": "jest",
     "test:watch": "jest --watch",
-    "lint": "eslint src/**/*.js",
-    "package": "npm run build && web-ext build"
+    "lint": "eslint \"src/**/*.js\" \"tests/**/*.js\"",
+    "package": "npm run build && web-ext build -s dist -a web-ext-artifacts --overwrite-dest"
   },
   "devDependencies": {
     "@babel/core": "^7.23.0",
@@ -71,8 +71,22 @@
     ],
     "collectCoverageFrom": [
       "src/**/*.js",
-      "!src/ui.js"
-    ]
+      "!src/ui.main.js"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "lines": 90,
+        "statements": 90,
+        "functions": 85,
+        "branches": 75
+      },
+      "./src/ui.js": {
+        "lines": 50,
+        "statements": 50,
+        "functions": 50,
+        "branches": 25
+      }
+    }
   },
   "eslintConfig": {
     "env": {

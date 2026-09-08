@@ -11,22 +11,29 @@
  */
 
 class SamlDecoder {
+  /** XML Signature namespace — the only namespace recognised as a message/assertion signature. */
+  static XMLDSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
+  /** Exact SAML 2.0 top-level success status code. */
+  static STATUS_SUCCESS = 'urn:oasis:names:tc:SAML:2.0:status:Success';
+
   // ─── Extraction ────────────────────────────────────────────────────────────
 
   /**
    * Find raw SAML data inside a captured request object.
-   * Returns { raw, messageType, binding [, preDecoded] } or null.
+   * Returns { raw, messageType, binding [, preDecoded] [, bindingSignature] } or null.
+   * For the Redirect binding the signature travels in the Signature/SigAlg query
+   * parameters rather than inside the XML, so it is captured here.
    */
   static extract(request) {
     const url = new URL(request.url);
 
     // Redirect binding — SAMLRequest (GET → IdP)
     const samlReq = url.searchParams.get('SAMLRequest');
-    if (samlReq) return { raw: samlReq, messageType: 'SAMLRequest', binding: 'redirect' };
+    if (samlReq) return { raw: samlReq, messageType: 'SAMLRequest', binding: 'redirect', bindingSignature: SamlDecoder.extractBindingSignature(url) };
 
     // Redirect binding — SAMLResponse (less common)
     const samlRes = url.searchParams.get('SAMLResponse');
-    if (samlRes) return { raw: samlRes, messageType: 'SAMLResponse', binding: 'redirect' };
+    if (samlRes) return { raw: samlRes, messageType: 'SAMLResponse', binding: 'redirect', bindingSignature: SamlDecoder.extractBindingSignature(url) };
 
     // WS-Federation wresult (URL-encoded XML, no deflate)
     const wresult = url.searchParams.get('wresult');
@@ -47,6 +54,15 @@ class SamlDecoder {
     }
 
     return null;
+  }
+
+  /**
+   * Redirect-binding signature metadata (SAML 2.0 Bindings §3.4.4.1), or null.
+   */
+  static extractBindingSignature(url) {
+    const signature = url.searchParams.get('Signature');
+    if (!signature) return null;
+    return { present: true, algorithm: url.searchParams.get('SigAlg') || null };
   }
 
   // ─── Decoding ──────────────────────────────────────────────────────────────
@@ -124,6 +140,9 @@ class SamlDecoder {
       issueInstant: root.getAttribute('IssueInstant'),
       destination: root.getAttribute('Destination'),
       issuer: SamlDecoder.getText(doc, 'Issuer'),
+      // An enveloped XMLDSig signature directly under the root element signs the whole message
+      messageSigned: SamlDecoder.hasDirectChild(root, 'Signature', SamlDecoder.XMLDSIG_NS),
+      hasEncryptedAssertion: doc.getElementsByTagNameNS('*', 'EncryptedAssertion').length > 0,
     };
 
     switch (root.localName) {
@@ -138,6 +157,20 @@ class SamlDecoder {
   static getText(doc, localName) {
     const el = doc.getElementsByTagNameNS('*', localName)[0];
     return el ? el.textContent.trim() : null;
+  }
+
+  /**
+   * True when `el` has a direct child element with the given local name and,
+   * when a namespace is given, that exact namespace (so a foreign or unqualified
+   * <Signature> is not mistaken for XMLDSig).
+   */
+  static hasDirectChild(el, localName, namespaceURI = null) {
+    if (!el) return false;
+    return Array.from(el.childNodes).some(n =>
+      n.nodeType === 1 &&
+      n.localName === localName &&
+      (namespaceURI === null || n.namespaceURI === namespaceURI)
+    );
   }
 
   static parseAuthnRequest(doc, root) {
@@ -177,7 +210,7 @@ class SamlDecoder {
     return {
       code: fullCode.split(':').pop(),
       fullCode,
-      isSuccess: fullCode.includes('Success'),
+      isSuccess: fullCode === SamlDecoder.STATUS_SUCCESS,
       message: msgEl ? msgEl.textContent.trim() : null,
     };
   }
@@ -201,6 +234,7 @@ class SamlDecoder {
     return {
       id: aEl.getAttribute('ID'),
       issueInstant: aEl.getAttribute('IssueInstant'),
+      signed: SamlDecoder.hasDirectChild(aEl, 'Signature', SamlDecoder.XMLDSIG_NS),
       issuer: (aEl.getElementsByTagNameNS('*', 'Issuer')[0] || {}).textContent
         ? aEl.getElementsByTagNameNS('*', 'Issuer')[0].textContent.trim() : null,
       nameID: nameIDEl ? {
@@ -234,6 +268,92 @@ class SamlDecoder {
       inResponseTo: root.getAttribute('InResponseTo'),
       status: SamlDecoder.parseStatus(doc),
     };
+  }
+
+  // ─── Security assessment ───────────────────────────────────────────────────
+
+  /** Clock tolerance applied to NotBefore / NotOnOrAfter checks. */
+  static CLOCK_SKEW_MS = 5 * 60 * 1000;
+  /** Assertion validity windows longer than this are flagged. */
+  static LONG_ASSERTION_LIFETIME_MS = 60 * 60 * 1000;
+
+  /**
+   * Assess a parsed SAML message. Returns [{ rule, severity, message }] in the
+   * same shape as the OAuth and Verified ID decoders. Never throws.
+   *
+   * @param {object} parsed    Output of SamlDecoder.parse
+   * @param {number} [now]     Epoch milliseconds (injectable for tests)
+   * @param {object} [context] { bindingSignature } from extract() — Redirect-binding
+   *                           signatures live in the query string, not the XML
+   */
+  static generateWarnings(parsed, now = Date.now(), context = {}) {
+    const warnings = [];
+    if (!parsed || parsed.error) return warnings;
+    const push = (rule, severity, message) => warnings.push({ rule, severity, message });
+    const parseTime = (v) => { const t = v ? Date.parse(v) : NaN; return isNaN(t) ? null : t; };
+    const bindingSigned = !!(context && context.bindingSignature && context.bindingSignature.present);
+
+    if (parsed.messageType === 'AuthnRequest') {
+      if (!parsed.destination) {
+        push('saml_request_no_destination', 'info',
+          'AuthnRequest has no Destination attribute — the IdP cannot verify the request was meant for it');
+      }
+      if (!parsed.messageSigned && !bindingSigned) {
+        push('saml_request_unsigned', 'info',
+          'AuthnRequest is not signed — acceptable for many IdPs, but signing prevents request tampering');
+      }
+      const fmt = parsed.nameIDPolicy && parsed.nameIDPolicy.format;
+      if (fmt && /nameid-format:unspecified$/.test(fmt)) {
+        push('saml_nameid_policy_unspecified', 'info',
+          'NameIDPolicy format is unspecified — the IdP chooses the identifier; prefer persistent or transient for stable, privacy-preserving subjects');
+      }
+    }
+
+    if (parsed.messageType === 'Response' || parsed.messageType === 'LogoutResponse') {
+      if (parsed.status && !parsed.status.isSuccess) {
+        push('saml_status_failure', 'error',
+          `SAML status is ${parsed.status.code || parsed.status.fullCode || 'unknown'}${parsed.status.message ? ` — ${parsed.status.message}` : ''}`);
+      }
+    }
+
+    if (parsed.messageType === 'Response') {
+      const a = parsed.assertion;
+      if (parsed.hasEncryptedAssertion) {
+        push('saml_assertion_encrypted', 'info',
+          'Assertion is encrypted (EncryptedAssertion) — contents cannot be decoded without the SP private key');
+      } else if (!a && parsed.status && parsed.status.isSuccess) {
+        push('saml_no_assertion', 'warning',
+          'Successful Response carries no Assertion');
+      }
+
+      if (a) {
+        if (!parsed.messageSigned && !a.signed && !bindingSigned) {
+          push('saml_unsigned', 'warning',
+            'Neither the Response nor the Assertion carries an XML signature — the SP must reject this message');
+        }
+        const cond = a.conditions || {};
+        const notBefore = parseTime(cond.notBefore);
+        const notOnOrAfter = parseTime(cond.notOnOrAfter);
+        if (notOnOrAfter !== null && notOnOrAfter + SamlDecoder.CLOCK_SKEW_MS < now) {
+          push('saml_assertion_expired', 'warning',
+            `Assertion expired at ${cond.notOnOrAfter} (NotOnOrAfter is in the past)`);
+        }
+        if (notBefore !== null && notBefore - SamlDecoder.CLOCK_SKEW_MS > now) {
+          push('saml_assertion_not_yet_valid', 'warning',
+            `Assertion is not yet valid (NotBefore ${cond.notBefore} is in the future)`);
+        }
+        if (notBefore !== null && notOnOrAfter !== null && notOnOrAfter - notBefore > SamlDecoder.LONG_ASSERTION_LIFETIME_MS) {
+          push('saml_assertion_long_lifetime', 'info',
+            `Assertion validity window is ${Math.round((notOnOrAfter - notBefore) / 60000)} minutes — assertions are normally valid for a few minutes`);
+        }
+        if (!cond.audiences || cond.audiences.length === 0) {
+          push('saml_no_audience_restriction', 'warning',
+            'Assertion has no AudienceRestriction — it could be replayed to a different service provider');
+        }
+      }
+    }
+
+    return warnings;
   }
 
   // ─── Formatting ────────────────────────────────────────────────────────────
@@ -279,7 +399,9 @@ class SamlDecoder {
     try {
       const xmlText = await SamlDecoder.decode(extracted);
       const parsed = SamlDecoder.parse(xmlText);
-      return { binding: extracted.binding, messageType: extracted.messageType, xmlText, parsed };
+      const bindingSignature = extracted.bindingSignature || null;
+      const warnings = SamlDecoder.generateWarnings(parsed, Date.now(), { bindingSignature });
+      return { binding: extracted.binding, messageType: extracted.messageType, xmlText, parsed, bindingSignature, warnings };
     } catch (err) {
       return { binding: extracted.binding, messageType: extracted.messageType, error: err.message };
     }

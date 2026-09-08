@@ -4,26 +4,19 @@
 
 import VerifiedIdDecoder from '../src/VerifiedIdDecoder.js';
 import samltrace from '../src/SAMLTrace.js';
+import { makeDetails, makeState } from './helpers.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Local shorthand: a bare captured request with a preset flowType. */
 function makeRequest(url, flowType, requestBody = null) {
   return { url, flowType, requestBody };
 }
 
-function makeDetails(url, method = 'GET', extras = {}) {
-  return {
-    url,
-    method,
-    tabId: 1,
-    type: 'xmlhttprequest',
-    timeStamp: Date.now(),
-    requestHeaders: [],
-    responseHeaders: [],
-    requestBody: null,
-    ...extras,
-  };
-}
+// The SAMLTrace singleton is shared across suites — give every test a fresh state.
+let savedState;
+beforeEach(() => { savedState = samltrace.state; samltrace.state = makeState(); });
+afterEach(() => { samltrace.state = savedState; });
 
 // ─── VerifiedIdDecoder.flattenBody ────────────────────────────────────────────
 
@@ -493,5 +486,118 @@ describe('SAMLTrace.handleVerifiedIdRequest', () => {
     const requestData = makeRequest('https://login.microsoftonline.com/token', 'oauth_token');
     samltrace.handleVerifiedIdRequest(requestData);
     expect(requestData.didAnalysis).toBeUndefined();
+  });
+});
+
+// ─── Additional field coverage ────────────────────────────────────────────────
+
+describe('VerifiedIdDecoder — callback payloads, status lists and OpenID4VP fields', () => {
+  it('reads requestStatus, state, requestId and verified credential types from a did_callback body', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://contoso.example.com/api/verifier/presentation-callback',
+      'did_callback',
+      {
+        type: 'json',
+        data: {
+          requestId: 'e4ef27ca-eb8c-4b63-823b-3b95140eac11',
+          requestStatus: 'presentation_verified',
+          state: 'state-xyz',
+          subject: 'did:web:contoso.example.com',
+          verifiedCredentialsData: [{ type: ['VerifiableCredential', 'VerifiedEmployee'] }]
+        }
+      }
+    ));
+    expect(result.operation).toBe('Request Callback / Event');
+    expect(result.requestStatus).toBe('presentation_verified');
+    expect(result.callbackState).toBe('state-xyz');
+    expect(result.requestId).toBe('e4ef27ca-eb8c-4b63-823b-3b95140eac11');
+    expect(result.subject).toBe('did:web:contoso.example.com');
+    expect(result.verifiedCredentialTypes).toEqual(['VerifiableCredential, VerifiedEmployee']);
+  });
+
+  it('skips malformed verifiedCredentialsData entries instead of failing the analysis', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://contoso.example.com/api/verifier/presentation-callback',
+      'did_callback',
+      {
+        type: 'json',
+        data: {
+          requestStatus: 'presentation_verified',
+          verifiedCredentialsData: [null, 'not-an-object', {}, { type: 42 }, { type: ['VerifiableCredential', 7, 'VerifiedEmployee'] }, { type: 'VerifiedId' }]
+        }
+      }
+    ));
+    expect(result.error).toBeUndefined();
+    expect(result.requestStatus).toBe('presentation_verified');
+    expect(result.verifiedCredentialTypes).toEqual(['VerifiableCredential, VerifiedEmployee', 'VerifiedId']);
+  });
+
+  it('prefers the request id from the URL path over the body', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://verifiedid.did.msidentity.com/v1.0/verifiableCredentials/requests/abcd1234',
+      'did_request_fetch',
+      { type: 'json', data: { requestId: 'other' } }
+    ));
+    expect(result.requestId).toBe('abcd1234');
+  });
+
+  it('surfaces status list index and credential for did_status requests', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://issuer.example.com/statuslist/1',
+      'did_status',
+      { type: 'json', data: { statusListIndex: 42, statusListCredential: 'https://issuer.example.com/statuslist/1' } }
+    ));
+    expect(result.statusListIndex).toBe(42);
+    expect(result.statusListCredential).toBe('https://issuer.example.com/statuslist/1');
+  });
+
+  it('flags id_token presence alongside vp_token in an OpenID4VP response', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://verifier.example.com/openid4vp/response',
+      'vc_presentation_openid4vp',
+      { type: 'formData', data: { vp_token: ['eyJ...'], id_token: ['eyJ...'] } }
+    ));
+    expect(result.vpTokenPresent).toBe(true);
+    expect(result.idTokenPresent).toBe(true);
+  });
+
+  it('joins credential_types arrays for OpenID4VCI issuance', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://issuer.example.com/openid4vci/credential',
+      'vc_issuance_openid4vci',
+      { type: 'json', data: { credential_types: ['VerifiedEmployee', 'VerifiedId'], format: 'jwt_vc_json' } }
+    ));
+    expect(result.credentialType).toBe('VerifiedEmployee, VerifiedId');
+    expect(result.format).toBe('jwt_vc_json');
+  });
+
+  it('returns an error object instead of throwing on an invalid URL', () => {
+    const result = VerifiedIdDecoder.analyzeRequest({ url: 'not a url', flowType: 'did_resolution', requestBody: null });
+    expect(result.error).toMatch(/Verified ID analysis failed/);
+  });
+});
+
+describe('VerifiedIdDecoder warning rule ids', () => {
+  it('assigns stable rule ids to every warning', () => {
+    const result = VerifiedIdDecoder.analyzeRequest(makeRequest(
+      'https://verifiedid.did.msidentity.com/v1.0/verifiableCredentials/createIssuanceRequest',
+      'did_issuance_request',
+      {
+        type: 'json',
+        data: {
+          credentialType: 'VerifiedEmployee',
+          pin: { value: '1234', length: 4 },
+          includeQRCode: true,
+          callback: { url: 'http://localhost:5000/api/issuer/callback', state: 's' }
+        }
+      }
+    ));
+    const rules = result.warnings.map(w => w.rule).sort();
+    expect(rules).toEqual(['vid_callback_localhost', 'vid_pin_required', 'vid_qr_code']);
+    for (const w of result.warnings) {
+      expect(['error', 'warning', 'info']).toContain(w.severity);
+      expect(typeof w.message).toBe('string');
+    }
+    expect(result.warnings.find(w => w.rule === 'vid_callback_localhost').severity).toBe('warning');
   });
 });
