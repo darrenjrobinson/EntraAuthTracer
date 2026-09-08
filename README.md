@@ -300,5 +300,5 @@ Licensed under the [BSD-2-Clause License](LICENSE), maintaining compatibility wi
 
 ---
 
-**Version**: 1.0.0 | **Browser Support**: Chrome 103+, Edge 103+ | [Privacy Policy](PRIVACY.md)
+**Version**: 1.1.0 | **Browser Support**: Chrome 103+, Edge 103+ | [Privacy Policy](PRIVACY.md)
 

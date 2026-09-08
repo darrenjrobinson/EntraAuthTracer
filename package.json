@@ -1,6 +1,6 @@
 {
   "name": "entra-auth-tracer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Browser extension for deep inspection of Microsoft Entra authentication and identity traffic",
   "author": "Darren J Robinson",
   "license": "BSD-2-Clause",

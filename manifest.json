@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Entra Auth Tracer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Inspect Microsoft Entra (Azure AD) auth traffic - OAuth 2.1, OIDC, SAML, FIDO2/Passkey flows, and Entra JWT claims decoding.",
 
   "icons": {
