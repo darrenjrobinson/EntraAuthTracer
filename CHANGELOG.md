@@ -46,6 +46,9 @@ corrections to the PRD's architecture (see the PRD's implementation notes).
 - Manifest: `scripting` permission added (no `activeTab` — `<all_urls>` already covers injection);
   two new webpack entries `dist/src/webmcp-bridge.js` and `dist/src/webmcp-page.js`
 - `getState` responses include the WebMCP status so the popup needs no extra polling
+- Build: `EXTENSION_TRIAL_TOKENS=<token>[,<token>] npm run build` adds `trial_tokens` to the built
+  manifest for origin-trial experiments; tokens are never committed (they are bound to one
+  extension id and only apply to the extension's own pages and service worker)
 
 ### Security
 - Tool output redacts client secrets, passwords, refresh tokens, authorization codes and full

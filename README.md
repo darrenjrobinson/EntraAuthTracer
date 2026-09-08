@@ -175,6 +175,7 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 ### Browser support and limitations
 
 - **Edge 147+ and Chrome 146+** ship WebMCP behind `chrome://flags/#enable-webmcp-testing`; **Chrome 149–156** run an origin trial. The extension detects `document.modelContext` and falls back to the older `navigator.modelContext`. Without either, the popup shows *WebMCP requires Edge 147+ or Chrome 149+ (Origin Trial). The popup UI works normally.*
+- **Chrome origin-trial tokens do not replace the flag.** A token registered for `chrome-extension://<id>` is applied by Chrome to the extension's own pages and service worker only, not to the runtime injected into web pages, so it does not light up the tool surface on https pages. To experiment anyway, build with `EXTENSION_TRIAL_TOKENS=<token> npm run build`, which adds `trial_tokens` to `dist/manifest.json`; tokens are bound to one extension id (unpacked ids depend on the folder path) and are never committed.
 - Only requests **sent by the browser** are visible (Manifest V3 has no response bodies), so tokens issued by the identity provider never appear — the tools say so in their descriptions.
 - Captures live in the background worker's memory; if the browser stops the worker the tools return an explicit empty-state note until a new flow is captured.
 - Pages whose Permissions-Policy disables the `tools` feature cannot host the registration; the popup reports this.
