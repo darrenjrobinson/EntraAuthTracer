@@ -166,9 +166,9 @@ describe('EntraAuthTracerUI (popup smoke tests)', () => {
     expect(badges).toEqual(expect.arrayContaining(['flow-badge flow-saml', 'flow-badge flow-oauth', 'flow-badge flow-did']));
   });
 
-  it('opens the detail panel, escapes raw bodies and shows related requests', async () => {
+  it('opens the detail panel, escapes body values and shows related requests', async () => {
     const reqs = oauthFlowFixtures();
-    reqs[1].requestBody = { type: 'raw', data: '<img src=x onerror="alert(1)">' };
+    reqs[1].requestBody = { type: 'formData', data: { state: ['<img src=x onerror="alert(1)">'], client_id: ['app'] } };
     const ui = await mount(reqs);
 
     ui.selectRequest(reqs[1]);
@@ -197,6 +197,50 @@ describe('EntraAuthTracerUI (popup smoke tests)', () => {
     expect(body).toContain('[REDACTED]');
     expect(body).not.toContain('top-secret');
     expect(body).toContain('client_id');
+  });
+
+  it('never renders or copies a raw body that could not be parsed', async () => {
+    const reqs = oauthFlowFixtures();
+    reqs[1].requestBody = { type: 'raw', data: 'client_secret=s3cret&junk=<img src=x onerror="alert(1)">' };
+    const ui = await mount(reqs);
+    ui.selectRequest(reqs[1]);
+    const body = document.getElementById('requestBody');
+    expect(body.querySelector('img')).toBeNull();
+    expect(body.textContent).toContain('[REDACTED raw body');
+    expect(body.textContent).not.toContain('s3cret');
+    expect(document.getElementById('formDataSectionHeader').querySelector('.copy-btn').dataset.copy).not.toContain('s3cret');
+  });
+
+  it('redacts query-string credentials everywhere a URL is shown or copied', async () => {
+    const leaky = 'https://login.microsoftonline.com/t/oauth2/v2.0/token?client_id=app&client_secret=leak-me';
+    const reqs = oauthFlowFixtures();
+    reqs[1].url = leaky;
+    const ui = await mount(reqs);
+
+    // timeline flow-group row (title attribute on the URL cell)
+    const rowTitle = document.querySelector('[data-request-id="o-token"] .fgi-url').getAttribute('title');
+    expect(rowTitle).not.toContain('leak-me');
+    expect(rowTitle).toContain('client_id=app');
+
+    // list view row: visible text, title and copy button
+    document.getElementById('viewListBtn').click();
+    const item = document.querySelector('#requestList [data-request-id="o-token"]');
+    expect(item.textContent).not.toContain('leak-me');
+    expect(item.querySelector('.col-url').getAttribute('title')).not.toContain('leak-me');
+    expect(item.querySelector('.copy-btn').dataset.copy).not.toContain('leak-me');
+    expect(item.querySelector('.copy-btn').dataset.copy).toContain('%5BREDACTED%5D');
+
+    // detail header copy button, HTTP tab value and its copy text, related-request chip
+    ui.selectRequest(reqs[1]);
+    expect(document.getElementById('copyDetailUrlBtn').dataset.copy).not.toContain('leak-me');
+    expect(document.getElementById('requestDetails').textContent).not.toContain('leak-me');
+    expect(document.getElementById('requestDetails').textContent).toContain('client_secret=%5BREDACTED%5D');
+    expect(document.getElementById('requestSectionHeader').querySelector('.copy-btn').dataset.copy).not.toContain('leak-me');
+    const chip = document.querySelector('#relatedRequestsList .related-current');
+    expect(chip.getAttribute('title')).not.toContain('leak-me');
+
+    // nothing in the whole popup DOM carries the secret
+    expect(document.getElementById('app').innerHTML).not.toContain('leak-me');
   });
 
   it('hides the popout button and resize handle when running as a popout window', async () => {

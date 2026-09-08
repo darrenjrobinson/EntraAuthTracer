@@ -145,9 +145,47 @@ describe('Sanitize', () => {
       expect(out.raw).toBeUndefined();
     });
 
-    it('returns raw bodies and null unchanged', () => {
-      expect(Sanitize.redactBody({ type: 'raw', data: 'plain text' })).toEqual({ type: 'raw', data: 'plain text' });
+    it('parses form-urlencoded raw bodies and redacts secret fields', () => {
+      const out = Sanitize.redactBody({ type: 'raw', data: 'grant_type=client_credentials&client_id=app&client_secret=s3cret&scope=openid%20profile' });
+      expect(out.type).toBe('raw');
+      expect(out.parsedAs).toBe('form');
+      const params = new URLSearchParams(out.data);
+      expect(params.get('client_secret')).toBe('[REDACTED]');
+      expect(params.get('client_id')).toBe('app');
+      expect(params.get('scope')).toBe('openid profile');
+      expect(out.data).not.toContain('s3cret');
+    });
+
+    it('parses JSON raw bodies and redacts nested secrets', () => {
+      const out = Sanitize.redactBody({ type: 'raw', data: '{"user":{"password":"p"},"state":"s"}' });
+      expect(out.parsedAs).toBe('json');
+      expect(JSON.parse(out.data)).toEqual({ user: { password: '[REDACTED]' }, state: 's' });
+    });
+
+    it('replaces raw text that cannot be parsed with a placeholder', () => {
+      const xml = '<soap:Envelope><saml:Assertion>secret-bearing</saml:Assertion></soap:Envelope>';
+      const out = Sanitize.redactBody({ type: 'raw', data: xml });
+      expect(out.redacted).toBe(true);
+      expect(out.parsedAs).toBeNull();
+      expect(out.data).toBe(`[REDACTED raw body — ${xml.length} chars could not be parsed as form data or JSON]`);
+      expect(out.data).not.toContain('secret-bearing');
+      expect(Sanitize.redactBody({ type: 'raw', data: 'plain text' }).redacted).toBe(true);
+    });
+
+    it('returns null unchanged', () => {
       expect(Sanitize.redactBody(null)).toBeNull();
+    });
+  });
+
+  describe('parseFormUrlEncoded', () => {
+    it('accepts key=value pairs and rejects prose, JSON and XML', () => {
+      expect(Sanitize.parseFormUrlEncoded('a=1&b=two%20words')).toEqual([['a', '1'], ['b', 'two words']]);
+      expect(Sanitize.parseFormUrlEncoded('a=')).toEqual([['a', '']]);
+      expect(Sanitize.parseFormUrlEncoded('plain text')).toBeNull();
+      expect(Sanitize.parseFormUrlEncoded('{"a":1}')).toBeNull();
+      expect(Sanitize.parseFormUrlEncoded('<x a="1"/>')).toBeNull();
+      expect(Sanitize.parseFormUrlEncoded('')).toBeNull();
+      expect(Sanitize.parseFormUrlEncoded('novalue')).toBeNull();
     });
   });
 

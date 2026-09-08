@@ -60,6 +60,8 @@ The following values are **redacted** (replaced with `[REDACTED]`) in the popup 
 
 `client_assertion` and `id_token_hint` JWTs are **truncated** to a short preview; their decoded header and claims are shown in the OAuth and Entra panels instead. Single-use debugging values such as `code`, `code_verifier`, `device_code`, `state` and `nonce` remain visible because they are what people debug, and they are not reusable credentials.
 
+Request URLs are redacted with the same rules wherever they are displayed or copied (request list, flow chips, detail header, HTTP tab, exports). Raw (unparsed) request bodies are displayed or exported only after being parsed as form data or JSON and redacted field by field; text that cannot be parsed is replaced by a placeholder rather than shown.
+
 The raw request bodies and headers are held unredacted in memory so the decoders can analyse them; redaction is applied at display and export time.
 
 ---

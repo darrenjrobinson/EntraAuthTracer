@@ -159,7 +159,47 @@ class Sanitize {
       delete copy.raw;
       return copy;
     }
+    if (requestBody.type === 'raw' || typeof requestBody.data === 'string') {
+      // Arbitrary text cannot be field-redacted: parse it into a structured body
+      // first (form-urlencoded or JSON) or replace it entirely.
+      return { ...requestBody, type: requestBody.type || 'raw', ...Sanitize.redactRawText(requestBody.data) };
+    }
     return { ...requestBody };
+  }
+
+  /**
+   * Redact a raw request body string.
+   * @returns {{ data: string, parsedAs: 'form'|'json'|null, redacted?: true }}
+   */
+  static redactRawText(text) {
+    const str = text == null ? '' : String(text);
+    const form = Sanitize.parseFormUrlEncoded(str);
+    if (form) {
+      const params = new URLSearchParams();
+      for (const [k, v] of form) params.append(k, String(Sanitize.redactObject(v, k)));
+      return { data: params.toString(), parsedAs: 'form' };
+    }
+    try {
+      const json = JSON.parse(str);
+      if (json && typeof json === 'object') {
+        return { data: JSON.stringify(Sanitize.redactObject(json)), parsedAs: 'json' };
+      }
+    } catch { /* not JSON */ }
+    return {
+      data: `[REDACTED raw body — ${str.length} chars could not be parsed as form data or JSON]`,
+      parsedAs: null,
+      redacted: true
+    };
+  }
+
+  /**
+   * Parse an application/x-www-form-urlencoded string into [key, value] pairs,
+   * or return null when the text does not have that shape.
+   */
+  static parseFormUrlEncoded(str) {
+    if (!str || !str.includes('=') || /[<>{}\s]/.test(str)) return null;
+    if (!str.split('&').every(pair => /^[^=&]+=[^&]*$/.test(pair))) return null;
+    return Array.from(new URLSearchParams(str).entries());
   }
 
   /**

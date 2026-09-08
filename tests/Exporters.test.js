@@ -135,7 +135,11 @@ describe('Exporters', () => {
       expect(r3.flow_category).toBe('did');
       expect(r4).not.toHaveProperty('request_headers');
       expect(r4).not.toHaveProperty('oauth_analysis');
-      expect(r4.request_body).toEqual({ type: 'raw', data: 'plain text' });
+      // unparseable raw text is never exported verbatim
+      expect(r4.request_body.type).toBe('raw');
+      expect(r4.request_body.redacted).toBe(true);
+      expect(r4.request_body.data).toMatch(/REDACTED raw body/);
+      expect(JSON.stringify(r4)).not.toContain('plain text');
     });
 
     it('formats timestamps as ISO strings and status codes as numbers', () => {
@@ -196,9 +200,10 @@ describe('Exporters', () => {
       expect(out).not.toContain('s3cret');
     });
 
-    it('prints raw and JSON bodies', () => {
+    it('prints JSON bodies and the placeholder for unparseable raw bodies', () => {
       const out = txt();
-      expect(out).toContain('  plain text');
+      expect(out).toContain('[REDACTED raw body');
+      expect(out).not.toContain('  plain text');
       expect(out).toContain('  {"clientDataJSON":"abc","authenticatorData":"def"}');
     });
 

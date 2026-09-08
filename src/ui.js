@@ -340,8 +340,9 @@ class EntraAuthTracerUI {
       const time = new Date(r.timestamp || Date.now()).toLocaleTimeString();
       const status = r.status || 'pending';
       const statusIcon = status === 'completed' ? '✓' : status === 'error' ? '✗' : '⧖';
-      let shortUrl = r.url || '';
-      try { shortUrl = new URL(r.url).pathname; } catch { /* keep */ }
+      const safeUrl = Sanitize.redactUrl(r.url || '');
+      let shortUrl = safeUrl;
+      try { shortUrl = new URL(safeUrl).pathname; } catch { /* keep */ }
       const stepDesc = FlowCorrelator.getFlowStepDesc(r, idx);
       const selectedClass = this.selectedRequest && this.selectedRequest.id === r.id ? ' selected' : '';
 
@@ -350,7 +351,7 @@ class EntraAuthTracerUI {
           <span class="fgi-step">${idx + 1}</span>
           <span class="fgi-time">${time}</span>
           <span class="fgi-method">${e(r.method || 'GET')}</span>
-          <span class="fgi-url" title="${e(r.url)}">${e(shortUrl)}</span>
+          <span class="fgi-url" title="${e(safeUrl)}">${e(shortUrl)}</span>
           <span class="fgi-status status-${status}">${statusIcon}</span>
           ${stepDesc ? `<span class="fgi-desc">${e(stepDesc)}</span>` : ''}
         </div>`;
@@ -433,7 +434,7 @@ class EntraAuthTracerUI {
       const isCurrent = r.id === request.id;
       const stepDesc = FlowCorrelator.getFlowStepDesc(r, idx) || r.flowType || '';
       const statusIcon = r.status === 'completed' ? '✓' : r.status === 'error' ? '✗' : '⧖';
-      return `<span class="related-item${isCurrent ? ' related-current' : ''}" data-request-id="${this.escapeHtml(r.id)}" title="${this.escapeHtml(r.url)}">
+      return `<span class="related-item${isCurrent ? ' related-current' : ''}" data-request-id="${this.escapeHtml(r.id)}" title="${this.escapeHtml(Sanitize.redactUrl(r.url || ''))}">
         ${statusIcon} ${idx + 1}${stepDesc ? ': ' + this.escapeHtml(stepDesc) : ''}
       </span>`;
     }).join('');
@@ -466,7 +467,7 @@ class EntraAuthTracerUI {
         items.push(this.renderRequestItem(req));
       } catch (err) {
         console.error('renderRequestItem failed:', err, req);
-        const shortUrl = (req && req.url) ? req.url.substring(0, 80) : '(unknown)';
+        const shortUrl = (req && req.url) ? Sanitize.redactUrl(req.url).substring(0, 80) : '(unknown)';
         items.push(`<div class="request-item error-item" title="${this.escapeHtml(err.message)}">&#9888; Error rendering request: ${this.escapeHtml(shortUrl)}</div>`);
       }
     }
@@ -490,10 +491,12 @@ class EntraAuthTracerUI {
    */
   renderRequestItem(request) {
     const time = new Date(request.timestamp || Date.now()).toLocaleTimeString();
+    // Every displayed or copied URL goes through the sanitizer (query secrets redacted)
+    const safeUrl = Sanitize.redactUrl(request.url || '');
     let hostname = '(unknown)';
-    let shortUrl = request.url || '';
+    let shortUrl = safeUrl;
     try {
-      const parsed = new URL(request.url);
+      const parsed = new URL(safeUrl);
       hostname = parsed.hostname;
       shortUrl = parsed.pathname + (parsed.search ? parsed.search.substring(0, 50) : '');
     } catch { /* keep defaults */ }
@@ -502,12 +505,12 @@ class EntraAuthTracerUI {
     const status = request.status || 'pending';
 
     return `
-      <div class="request-item" data-request-id="${request.id}">
+      <div class="request-item" data-request-id="${this.escapeHtml(request.id)}">
         <span class="col-timestamp">${time}</span>
-        <span class="col-method">${method}</span>
-        <span class="col-url" title="${this.escapeHtml(request.url || '')}">
+        <span class="col-method">${this.escapeHtml(method)}</span>
+        <span class="col-url" title="${this.escapeHtml(safeUrl)}">
           <span class="url-text">${this.escapeHtml(shortUrl || hostname)}</span>
-          ${this.makeCopyBtn(request.url || '', 'Copy URL')}
+          ${this.makeCopyBtn(safeUrl, 'Copy URL')}
         </span>
         <span class="col-status status-${status}">${this.formatStatus(status)}</span>
         <span class="col-flow">
@@ -595,10 +598,10 @@ class EntraAuthTracerUI {
     const url = new URL(request.url);
     document.getElementById('detailTitle').textContent = `${request.method} ${url.pathname}`;
 
-    // Wire the header copy button to copy the full URL
+    // Wire the header copy button to copy the full (redacted) URL
     const copyUrlBtn = document.getElementById('copyDetailUrlBtn');
     if (copyUrlBtn) {
-      copyUrlBtn.dataset.copy = request.url;
+      copyUrlBtn.dataset.copy = Sanitize.redactUrl(request.url || '');
       copyUrlBtn.style.display = 'inline-flex';
     }
 
@@ -673,9 +676,10 @@ class EntraAuthTracerUI {
     const requestDetails = document.getElementById('requestDetails');
     const responseDetails = document.getElementById('responseDetails');
 
-    // Request details
+    // Request details (URL redacted — query-string credentials never reach the DOM or clipboard)
+    const safeUrl = Sanitize.redactUrl(request.url || '');
     const requestCopyText = [
-      `URL: ${request.url}`,
+      `URL: ${safeUrl}`,
       `Method: ${request.method}`,
       `Timestamp: ${new Date(request.timestamp).toISOString()}`,
       `Flow Type: ${request.flowType}`,
@@ -685,7 +689,7 @@ class EntraAuthTracerUI {
 
     requestDetails.innerHTML = `
       <div class="label">URL:</div>
-      <div class="value">${this.escapeHtml(request.url)}</div>
+      <div class="value">${this.escapeHtml(safeUrl)}</div>
       <div class="label">Method:</div>
       <div class="value">${this.escapeHtml(request.method)}</div>
       <div class="label">Timestamp:</div>
@@ -1415,7 +1419,8 @@ class EntraAuthTracerUI {
     } else if (body.type === 'json') {
       return JSON.stringify(Sanitize.redactObject(body.data), null, 2);
     }
-    return String(body.data);
+    // Raw text: shown only after structured redaction (or replaced by a placeholder)
+    return String(Sanitize.redactBody(body).data);
   }
 
   /**
@@ -1430,7 +1435,7 @@ class EntraAuthTracerUI {
     } else if (body.type === 'json') {
       return `<div class="param-value"><pre>${this.escapeHtml(JSON.stringify(Sanitize.redactObject(body.data), null, 2))}</pre></div>`;
     } else {
-      return `<div class="param-value">${this.escapeHtml(body.data)}</div>`;
+      return `<div class="param-value">${this.escapeHtml(Sanitize.redactBody(body).data)}</div>`;
     }
   }
 
