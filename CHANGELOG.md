@@ -8,6 +8,56 @@ From 1.1.0 onward, git tags match the manifest version exactly (`v1.1.0`).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-08
+
+WebMCP release: the extension can register its decoded capture as six read-only tools for
+AI agents in one user-selected tab. Implements `docs/PRD-webmcp-v1.0.md` with three
+corrections to the PRD's architecture (see the PRD's implementation notes).
+
+### Added
+- **WebMCP mode** — *Enable WebMCP* in the popup arms the active https tab: the extension
+  injects an isolated-world bridge and a MAIN-world page runtime that registers the tools on
+  `document.modelContext` (falling back to the origin-trial `navigator.modelContext`), with one
+  `AbortController` per registration and `unregisterTool()` fallback for older builds. A banner
+  states *WebMCP mode active on `<host>` — AI agents in this tab can read captured tokens*.
+  Disable, a new document load, a cross-origin URL change or tab close unregister the tools.
+- **Six tools** (`src/webmcp/WebMcpTools.js`): `list_auth_sessions`, `search_sessions`,
+  `get_session_detail`, `get_security_warnings`, `analyze_flow`, `get_token_claims` — newest-first
+  rows with `flowId`, provider and user; full session detail (OAuth, FIDO2 incl. BE/BS and AAGUID,
+  Verified ID, SAML decoded in the worker, JWT summaries); aggregated findings with stable rule ids
+  across oauth / saml / verified-id / jwt; correlated-flow timelines with summaries; JWT header,
+  claims, AMR, device platform, CAE/PoP; structured search. Descriptions are baked with the live
+  capture count and armed origin; results are capped at 64 KB.
+- **Background controller** (`WebMcpController`): resolves the active tab of the last-focused
+  normal window (ignoring the popout), gates on https and a loaded page, persists the armed record
+  in `chrome.storage.session` and re-validates it after a service-worker restart, serves tool
+  calls only for the armed tab, and refreshes descriptions (debounced) as captures change.
+- **`ProviderDetector`** — identity provider stamped on every captured request (Entra incl.
+  sovereign clouds / B2C / External ID, Microsoft account, Entra Verified ID, DID resolvers, Google,
+  Firebase, Okta, Cognito, ADFS, Shibboleth, IdentityServer/Duende).
+- **`SamlDecoder.parseLite`** — regex SAML parser used automatically where `DOMParser` is
+  unavailable (service worker), parity-tested against the DOM parser.
+- Verified ID decoder reads callback payload fields (`requestStatus`, `state`, `subject`, verified
+  credential types).
+- Unsupported browsers get the PRD's message verbatim: *WebMCP requires Edge 147+ or Chrome 149+
+  (Origin Trial). The popup UI works normally.*
+
+### Changed
+- Manifest: `scripting` permission added (no `activeTab` — `<all_urls>` already covers injection);
+  two new webpack entries `dist/src/webmcp-bridge.js` and `dist/src/webmcp-page.js`
+- `getState` responses include the WebMCP status so the popup needs no extra polling
+
+### Security
+- Tool output redacts client secrets, passwords, refresh tokens, authorization codes and full
+  device codes, and never returns raw JWT strings (claims only). PRIVACY.md gains a WebMCP
+  section describing exactly what is exposed, to whom (agents **and** the page's own scripts),
+  and how the mode ends.
+
+### Documentation
+- README: WebMCP section (trust model, tool table, browser support, limitations); permissions
+  table updated for `scripting` and the real use of `storage`
+- `docs/PRD-webmcp-v1.0.md` archived with implementation notes
+
 ## [1.1.0] - 2026-09-08
 
 Hardening release: the test suite now exercises the features the extension advertises
@@ -150,6 +200,7 @@ Initial public release (Chrome Web Store and Microsoft Edge Add-ons). Built in s
 - Popout / splitter layout bugs in the dual-mode layout
 - Manifest description length for store submission
 
-[Unreleased]: https://github.com/darrenjrobinson/EntraAuthTracer/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/darrenjrobinson/EntraAuthTracer/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/darrenjrobinson/EntraAuthTracer/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/darrenjrobinson/EntraAuthTracer/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/darrenjrobinson/EntraAuthTracer/releases/tag/v1.0.0

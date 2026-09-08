@@ -2,7 +2,7 @@
 
 A Chromium-based browser extension for deep inspection of authentication and identity traffic — across Microsoft Entra (Azure AD), Okta, AWS Cognito, Google, ADFS, Shibboleth, IdentityServer/Duende, SAP, and any standards-compliant SAML 2.0, OIDC, or OAuth 2.x provider. 
 
-Entra Auth Tracer extends the capabilities of SimpleSAMLphp SAML-tracer to support modern authentication flows including FIDO2/Passkey analysis, OAuth 2.1 grant types, HTTP-level client authentication decoding, Entra-specific JWT claims enrichment, and Entra Verified ID / Decentralised Identity (DID) flows.
+Entra Auth Tracer extends the capabilities of SimpleSAMLphp SAML-tracer to support modern authentication flows including FIDO2/Passkey analysis, OAuth 2.1 grant types, HTTP-level client authentication decoding, Entra-specific JWT claims enrichment, and Entra Verified ID / Decentralised Identity (DID) flows. Since 1.2.0 it can also expose everything it has decoded to AI agents in your browser through [WebMCP](#webmcp-ai-agent-access) — opt-in, per tab, read-only.
 
 ![Entra Auth Tracer](icons/icon128.png)
 
@@ -144,6 +144,41 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 - **Extension Icon Badge**: Live event-counter badge on the toolbar icon — increments on each captured auth event and resets when the popup is opened
 - **Bounded capture buffer**: the most recent 500 requests are kept in memory; older captures are evicted first
 
+## WebMCP (AI agent access)
+
+[WebMCP](https://github.com/webmachinelearning/webmcp) is the W3C Web Machine Learning Community Group draft that lets a page register typed tools on `document.modelContext` for AI agents running in the browser (Copilot in Edge, Gemini in Chrome, or any other agent that reads the page's model context). Entra Auth Tracer can register its decoded capture as six read-only tools on a page **you choose**, so you can ask an agent questions like *"any security issues with the sign-in I just did?"* or *"walk me through that device-code flow"* instead of clicking through the popup.
+
+### How to enable it
+
+1. Open the https page you want the agent to work from and open the Entra Auth Tracer popup.
+2. Click **Enable WebMCP**. The button turns into **Disable WebMCP** and a banner reads *WebMCP mode active on `<host>` — AI agents in this tab can read captured tokens. 6 tools registered.*
+3. Ask the agent in that tab. Tool descriptions carry the live capture count, so the agent knows what is available.
+4. Click **Disable WebMCP**, navigate the tab to another document, or close the tab to stop. Nothing is registered on any other tab, and nothing is registered until you click Enable.
+
+### Trust model — read this before enabling
+
+- Enabling exposes **all captured data for the current capture session** — decoded OAuth analysis, SAML assertions, FIDO2 data, Verified ID requests and the **claims of any JWT the client sent** (`client_assertion`, `id_token_hint`, `Authorization: Bearer`) — to any WebMCP-capable agent in that tab **and to that page's own scripts**, because WebMCP tools are registered on the page's own model context. Agents are commonly backed by a remote model, so treat enabling as sharing that data with the agent's provider.
+- Client secrets, passwords, refresh tokens, authorization codes and full device codes are redacted in tool output, and raw JWT strings are never returned — only their decoded claims.
+- The mode is off by default, limited to a single tab, https-only, and ends on Disable, a new document load, a cross-origin URL change, or tab close. The armed-tab record survives a service-worker restart but not a browser restart.
+
+### Tools
+
+| Tool | What it returns | Arguments |
+|---|---|---|
+| `list_auth_sessions` | Captured sessions newest first: flow type/label, provider, user (when visible), method/status, timestamp, `flowId`, warning counts | `limit` (≤100), `flowType` (category or exact) |
+| `search_sessions` | Same rows filtered by free text, flow type, provider, status, HTTP status code, time range | `query`, `flowType`, `provider`, `status`, `statusCode`, `since`, `until`, `limit` |
+| `get_session_detail` | Everything decoded for one request: sanitised parameters/headers/body, OAuth 2.1 analysis, FIDO2 (flags incl. BE/BS, AAGUID, sign count, key), Verified ID, SAML message + assessment, JWT summaries, warnings, flow position | `sessionId` |
+| `get_security_warnings` | Every finding across the capture with rule id, severity, session and flow, sorted error → warning → info | `severity` |
+| `analyze_flow` | Ordered timeline of a correlated flow with per-step status/description, aggregated warnings and a summary (grant, PKCE, client auth, scopes, device-code polls, outcome) | `flowId` (or a `sessionId`) |
+| `get_token_claims` | Header, Entra-labelled claims, AMR methods, device platform, CAE/PoP status and warnings for each JWT the client sent in the request | `sessionId` |
+
+### Browser support and limitations
+
+- **Edge 147+ and Chrome 146+** ship WebMCP behind `chrome://flags/#enable-webmcp-testing`; **Chrome 149–156** run an origin trial. The extension detects `document.modelContext` and falls back to the older `navigator.modelContext`. Without either, the popup shows *WebMCP requires Edge 147+ or Chrome 149+ (Origin Trial). The popup UI works normally.*
+- Only requests **sent by the browser** are visible (Manifest V3 has no response bodies), so tokens issued by the identity provider never appear — the tools say so in their descriptions.
+- Captures live in the background worker's memory; if the browser stops the worker the tools return an explicit empty-state note until a new flow is captured.
+- Pages whose Permissions-Policy disables the `tools` feature cannot host the registration; the popup reports this.
+
 ## Supported Authentication Flows
 
 ### OAuth 2.x / OIDC
@@ -258,8 +293,9 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 |------------|---------|
 | `webRequest` | Observe HTTP request URLs, headers and request bodies (read-only — Manifest V3 has no blocking access and cannot read response bodies) |
 | `<all_urls>` | Authentication flows span identity providers, relying parties and DID resolvers on many domains |
-| `tabs` | Associate captured requests with the originating browser tab |
-| `storage` | Declared for upcoming session-state features; nothing is written to `chrome.storage` in this version |
+| `tabs` | Associate captured requests with the originating browser tab; find the active tab and notice navigation/close when WebMCP mode is on |
+| `storage` | `chrome.storage.session` holds the WebMCP armed-tab record (tab id, origin, timestamp) so it survives a service-worker restart; nothing else is written |
+| `scripting` | Inject the WebMCP bridge and page runtime into the active tab — only when you click **Enable WebMCP** |
 
 Layout preferences (view mode, split-pane and popup size) are kept in the extension page's own `localStorage`. The extension requires Chrome or Edge 103 or later (`minimum_chrome_version`).
 
@@ -269,6 +305,7 @@ Layout preferences (view mode, split-pane and popup size) are kept in the extens
 - **No Data Collection**: The extension does not send data to any external servers
 - **Sensitive Data Handling**: client secrets, passwords, refresh / access / ID tokens, assertions and `Authorization` / `Cookie` headers are redacted in the UI and in exports; `client_assertion` and `id_token_hint` are truncated (their decoded claims are displayed). Single-use debugging values such as `code`, `code_verifier`, `state` and `nonce` remain visible
 - **Temporary Storage**: Captured requests live only in the memory of the extension's background service worker (at most 500). They are cleared when you click **Clear**, when the browser stops the service worker or restarts, or when older entries are evicted
+- **WebMCP is opt-in**: no captured data is exposed to AI agents or pages unless you enable WebMCP mode on a tab (see [WebMCP](#webmcp-ai-agent-access))
 
 Full details: [Privacy Policy](PRIVACY.md)
 
@@ -300,5 +337,5 @@ Licensed under the [BSD-2-Clause License](LICENSE), maintaining compatibility wi
 
 ---
 
-**Version**: 1.1.0 | **Browser Support**: Chrome 103+, Edge 103+ | [Privacy Policy](PRIVACY.md)
+**Version**: 1.2.0 | **Browser Support**: Chrome 103+, Edge 103+ | [Privacy Policy](PRIVACY.md)
 
