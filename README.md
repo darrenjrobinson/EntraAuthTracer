@@ -28,14 +28,15 @@ Detects OAuth 2.x and OIDC traffic automatically across a broad set of endpoints
 | **OIDC Standards** | `/.well-known/openid-configuration` (discovery), `/userinfo`, `/introspect`, `/revoc`, `/endsession` |
 
 #### Flow & Grant Type Intelligence
-- **PKCE**: Code challenge/verifier analysis with S256 compliance and RFC 7636 entropy checks; warnings for `plain` or missing PKCE
+- **PKCE**: Code challenge/verifier analysis with S256 compliance and RFC 7636 length/charset checks; warnings for `plain` or missing PKCE
+- **Redirect URI assessment**: `redirect_uri` values using plain `http://` (non-loopback), the deprecated `oob` URN or a private-use scheme are flagged on both the authorization request and the token exchange (RFC 8252 loopback redirects are noted, not warned)
 - **Device Code**: Request correlation via `device_code` token with a visual timeline grouping initiation and poll requests
 - **Client Credentials**: Machine-to-machine flow analysis (see Client Authentication below)
 - **OIDC Discovery**: Detects `/.well-known/openid-configuration` fetches and labels them with the provider context
 - **Okta Classic & OIE**: Detects Okta's `authn` API (Classic Engine) and `idx` pipeline (Identity Engine / OIE)
-- **Grant Type Intelligence**: Smart labeling of all OAuth 2.1 grant types with compliance flags and deprecation warnings (implicit, ROPC)
-- **Scope Registry**: 40+ Microsoft scope URIs mapped to human-readable descriptions
-- **Security Warnings**: Per-flow security assessment with error/warning/info severity surfaced in the UI
+- **Grant Type Intelligence**: Smart labeling of all OAuth 2.1 grant types with compliance flags and deprecation warnings (implicit, ROPC). ROPC (`grant_type=password`) requests are decoded — client, scopes, client authentication method and the username's domain, never the credential values — and flagged as removed in OAuth 2.1
+- **Scope Registry**: Well-known Microsoft Graph and Azure scope URIs mapped to human-readable descriptions (exact and prefix matched)
+- **Security Warnings**: Per-flow security assessment with error/warning/info severity surfaced in the UI; every finding carries a stable rule id (e.g. `pkce_missing`, `redirect_uri_http`, `client_auth_secret_basic`, `ropc_deprecated`)
 
 #### Client Authentication Decoding
 The extension decodes the authentication method used by the OAuth client at the token endpoint, including credentials that only appear in HTTP headers (captured via `onBeforeSendHeaders` and merged with the body analysis):
@@ -67,12 +68,14 @@ Detects and decodes SAML traffic across a wide range of service providers and id
 | **SAML ECP** | Enhanced Client or Proxy profile — detected on `/ECP/` paths |
 | **WS-Federation** | Full `/wsfederation` path and short `/wsfed` path — `wa=wsignin1.0`/`wsignout1.0` |
 
+The SAML tab decodes both bindings (raw DEFLATE for Redirect, base64 for POST) and WS-Fed `wresult` payloads, parses AuthnRequest / Response / Assertion / LogoutRequest / LogoutResponse, and runs a **security assessment**: unsigned Response and Assertion, non-success status, expired or not-yet-valid assertions, missing `AudienceRestriction`, encrypted assertions, unsigned AuthnRequests, `unspecified` NameID policies and unusually long validity windows are flagged with the same rule-id / severity model as the OAuth findings.
+
 ### FIDO2 / Passkey Analysis
-- Full CBOR decoding of `clientDataJSON` and `authenticatorData`
-- Authenticator identification — Windows Hello, YubiKey, and other FIDO2 hardware keys via AAGUID recognition
-- Complete FIDO2 binary structure analysis with flag decomposition and credential data extraction
-- EC2 (Elliptic Curve) and RSA key type support with algorithm identification
-- Rich detail display with formatted output and collapsible raw data
+- Full decoding of `clientDataJSON`, `authenticatorData` and registration `attestationObject` (format, algorithm, certificate count) — including PublicKeyCredential JSON with the ceremony data nested under `response`
+- Authenticator identification via a built-in AAGUID registry: Windows Hello, Microsoft Authenticator, Apple Passwords / iCloud Keychain, Google Password Manager, Samsung Pass, 1Password, Bitwarden, Dashlane, Enpass, Keeper, KeePassXC, NordPass, Proton Pass, YubiKey 5 / Bio / FIPS series and Security Key by Yubico
+- Flag decomposition — UP, UV, **BE** (backup eligible) and **BS** (backup state) for synced passkeys, AT, ED — plus the signature counter and authenticator extensions (`credProtect`, `minPinLength`, …)
+- COSE public key parsing for EC2, RSA and OKP keys with curve and algorithm identification
+- Rich detail display with formatted output and collapsible raw CBOR data
 
 #### What you will see during a Passkey sign-in
 
@@ -135,9 +138,11 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 
   ![HTTP request detail with multi-step flow correlation chips](<images/Entra Auth Tracer - Detailed Flow.png>)
 
-- **Status Bar Breakdown**: Live per-category request counts (SAML, OAuth, FIDO2, Device Code) plus error count
-- **Advanced Filtering**: Real-time search, method, flow-type, and status filters
+- **Status Bar Breakdown**: Live per-category request counts (SAML, OAuth, FIDO2, Device Code, Verified ID) plus error count
+- **Advanced Filtering**: Real-time search, method, flow-type, and status filters. The flow filter groups every captured endpoint into SAML (incl. ADFS and ECP), OAuth (incl. OIDC discovery, userinfo, introspection, revocation, logout and Okta), FIDO2, Device Code, Verified ID / DID and Other
+- **Sensitive Value Handling**: client secrets, passwords, refresh / access / ID tokens, assertions and `Authorization` / `Cookie` headers are redacted in the UI **and in every export**; `client_assertion` and `id_token_hint` are truncated because their decoded claims are shown instead
 - **Extension Icon Badge**: Live event-counter badge on the toolbar icon — increments on each captured auth event and resets when the popup is opened
+- **Bounded capture buffer**: the most recent 500 requests are kept in memory; older captures are evicted first
 
 ## Supported Authentication Flows
 
@@ -148,8 +153,8 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 | **Authorization Code + PKCE** | Code flow with RFC 7636 PKCE inspection |
 | **Client Credentials** | Machine-to-machine with `client_secret_post`, `client_secret_basic`, Digest auth, or `client_assertion` |
 | **Device Code** | Initiation, polling, and token exchange with correlated timeline |
-| **Refresh Token** | Token refresh with expiry and rotation analysis |
-| **ROPC / Implicit** | Deprecated flows flagged with compliance warnings |
+| **Refresh Token** | Token refresh requests with client and scope analysis |
+| **ROPC / Implicit** | Removed in OAuth 2.1 — decoded and flagged (ROPC: client, scopes, auth method, username domain; Implicit: `response_type`) |
 | **OIDC Discovery** | `/.well-known/openid-configuration` endpoint detection |
 | **OIDC UserInfo** | `/userinfo` endpoint calls |
 | **OIDC Introspection** | `/introspect` token introspection |
@@ -196,8 +201,8 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 
 ### From the Browser Store
 
-- **Chrome Web Store**: Search for "Entra Auth Tracer" or install directly from the store listing
-- **Microsoft Edge Add-ons Store**: Search for "Entra Auth Tracer" or install directly from the store listing
+- **Chrome Web Store**: [Entra Auth Tracer](https://chromewebstore.google.com/detail/entra-auth-tracer/phnebijghhehloikpgohcblcljkaokbh)
+- **Microsoft Edge Add-ons**: [Entra Auth Tracer](https://microsoftedge.microsoft.com/addons/detail/miggooielleiofpinmmdoaljdcppnimd)
 
 ### From a GitHub Release (Recommended for testers)
 
@@ -215,7 +220,7 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/DarrenJRobinson/EntraAuthTracer.git
+   git clone https://github.com/darrenjrobinson/EntraAuthTracer.git
    cd EntraAuthTracer
    ```
 
@@ -224,8 +229,10 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
    npm install
    ```
 
-3. **Build the extension:**
+3. **Lint, test and build the extension:**
    ```bash
+   npm run lint
+   npm test
    npm run build
    ```
 
@@ -249,18 +256,19 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 
 | Permission | Purpose |
 |------------|---------|
-| `webRequest` | Intercept HTTP requests for analysis |
-| `webRequestBlocking` | Access request bodies for FIDO2 decoding |
-| `<all_urls>` | Monitor authentication flows across all sites |
-| `tabs` | Associate requests with browser tabs |
-| `storage` | Store user preferences and settings |
+| `webRequest` | Observe HTTP request URLs, headers and request bodies (read-only — Manifest V3 has no blocking access and cannot read response bodies) |
+| `<all_urls>` | Authentication flows span identity providers, relying parties and DID resolvers on many domains |
+| `tabs` | Associate captured requests with the originating browser tab |
+| `storage` | Declared for upcoming session-state features; nothing is written to `chrome.storage` in this version |
+
+Layout preferences (view mode, split-pane and popup size) are kept in the extension page's own `localStorage`. The extension requires Chrome or Edge 103 or later (`minimum_chrome_version`).
 
 ## Privacy & Security
 
 - **Local Processing**: All analysis happens locally in your browser — no data leaves your machine
 - **No Data Collection**: The extension does not send data to any external servers
-- **Sensitive Data Handling**: Client secrets and refresh tokens are automatically redacted
-- **Temporary Storage**: Captured request data is cleared when the extension is closed
+- **Sensitive Data Handling**: client secrets, passwords, refresh / access / ID tokens, assertions and `Authorization` / `Cookie` headers are redacted in the UI and in exports; `client_assertion` and `id_token_hint` are truncated (their decoded claims are displayed). Single-use debugging values such as `code`, `code_verifier`, `state` and `nonce` remain visible
+- **Temporary Storage**: Captured requests live only in the memory of the extension's background service worker (at most 500). They are cleared when you click **Clear**, when the browser stops the service worker or restarts, or when older entries are evicted
 
 Full details: [Privacy Policy](PRIVACY.md)
 
@@ -270,13 +278,13 @@ This is a fork of [SimpleSAMLphp SAML-tracer](https://github.com/SimpleSAMLphp/S
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/new-capability`
-3. Make your changes and add tests
-4. Ensure tests pass: `npm test`
+3. Make your changes and add tests (`tests/helpers.js` has builders for requests, JWTs and WebAuthn structures)
+4. Ensure lint and tests pass: `npm run lint && npm test` — CI runs the same checks plus a build on every pull request, with coverage thresholds enforced
 5. Submit a pull request
 
 ## License
 
-Licensed under the BSD-2-Clause License, maintaining compatibility with the upstream SimpleSAMLphp SAML-tracer project.
+Licensed under the [BSD-2-Clause License](LICENSE), maintaining compatibility with the upstream SimpleSAMLphp SAML-tracer project.
 
 ## Credits
 
@@ -286,11 +294,11 @@ Licensed under the BSD-2-Clause License, maintaining compatibility with the upst
 
 ## Support
 
-- **GitHub Issues**: [Report a bug or request a feature](https://github.com/DarrenJRobinson/EntraAuthTracer/issues)
-- **Documentation**: [Project Wiki](https://github.com/DarrenJRobinson/EntraAuthTracer/wiki)
+- **GitHub Issues**: [Report a bug or request a feature](https://github.com/darrenjrobinson/EntraAuthTracer/issues)
+- **Documentation**: this README, the [CHANGELOG](CHANGELOG.md) and the original [product requirements](docs/PRD-v1.0.md)
 - **Blog & Tutorials**: Feature walkthroughs at [blog.darrenjrobinson.com](https://blog.darrenjrobinson.com)
 
 ---
 
-**Version**: 1.0.0 | **Browser Support**: Chrome 88+, Edge 88+ | [Privacy Policy](PRIVACY.md)
+**Version**: 1.0.0 | **Browser Support**: Chrome 103+, Edge 103+ | [Privacy Policy](PRIVACY.md)
 

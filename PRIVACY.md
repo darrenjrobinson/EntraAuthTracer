@@ -1,6 +1,6 @@
 # Privacy Policy — Entra Auth Tracer
 
-**Effective date:** 27 March 2026  
+**Effective date:** 8 September 2026  
 **Extension:** Entra Auth Tracer  
 **Author:** Darren J Robinson  
 
@@ -14,16 +14,18 @@ Entra Auth Tracer processes authentication and identity traffic **entirely on yo
 
 ## What data does the extension access?
 
-When you use Entra Auth Tracer, the extension observes HTTP/HTTPS requests made by your browser that match authentication and identity protocols (OAuth 2.x, OIDC, SAML 2.0, FIDO2/WebAuthn, and Entra Verified ID). This includes:
+When you use Entra Auth Tracer, the extension observes HTTP/HTTPS requests made by your browser that match authentication and identity protocols (OAuth 2.x, OIDC, SAML 2.0, WS-Federation, FIDO2/WebAuthn, and Entra Verified ID). This includes:
 
-- Request and response URLs, HTTP methods, and status codes
+- Request URLs, HTTP methods, response status codes and response headers
 - Request headers (e.g. `Authorization`, `Content-Type`) and POST body parameters
 - Token endpoint parameters — grant types, client IDs, scopes, PKCE challenge values
 - SAML assertions and WS-Federation payloads
-- FIDO2 `clientDataJSON` and `authenticatorData` binary structures
-- JWT claims from `id_token`, `access_token`, and `client_assertion` values found in captured requests
+- FIDO2 `clientDataJSON`, `authenticatorData` and `attestationObject` binary structures
+- JWT claims from `client_assertion` and `id_token_hint` values found in captured requests
 
-This data is captured in memory for the duration of your browser session and displayed in the extension popup.
+Response **bodies** are not available to Manifest V3 extensions, so tokens issued by an identity provider in a response are never captured.
+
+This data is held in memory for the duration of the background worker's life and displayed in the extension popup.
 
 ---
 
@@ -41,16 +43,24 @@ All captured data is used **solely to display information to you** — the perso
 
 | Storage location | What is stored | When it is cleared |
 |---|---|---|
-| **Extension in-memory state** | Captured request list for the current session | When the browser tab or extension popup is closed, or when you click **Clear** |
-| **`chrome.storage.local`** (browser local storage) | User preferences only (e.g. selected view mode, split-pane position) | When the extension is uninstalled, or manually via browser settings |
+| **Extension in-memory state** (background service worker) | The most recent 500 captured requests for the current browser session | When you click **Clear**, when the browser stops the extension's background worker or restarts, or when older entries are evicted to make room |
+| **`localStorage` of the extension's own pages** | Layout preferences only (view mode, split-pane position, popup size) | When the extension is uninstalled, or manually via browser settings |
 
-No authentication tokens, credentials, assertion payloads, or personal data are persisted to `chrome.storage` or any other durable store.
+No authentication tokens, credentials, assertion payloads, or personal data are persisted to `chrome.storage`, `localStorage` or any other durable store. The `storage` permission is declared for upcoming session-state features; nothing is written to `chrome.storage` in this version.
 
 ---
 
 ## Sensitive data handling
 
-The extension automatically **redacts client secrets** in the UI (replacing the value with `[REDACTED]`). Refresh tokens and other bearer credentials visible in captured requests are displayed to you for debugging purposes but are never transmitted or stored.
+The following values are **redacted** (replaced with `[REDACTED]`) in the popup and in every export format:
+
+- `client_secret` and any parameter or header containing `client_secret`, `password` or `refresh_token`
+- the `assertion`, `access_token` and `id_token` parameters
+- `Authorization` and `Proxy-Authorization` header credentials (the scheme is kept, e.g. `Basic [REDACTED]`), and `Cookie` / `Set-Cookie` headers
+
+`client_assertion` and `id_token_hint` JWTs are **truncated** to a short preview; their decoded header and claims are shown in the OAuth and Entra panels instead. Single-use debugging values such as `code`, `code_verifier`, `device_code`, `state` and `nonce` remain visible because they are what people debug, and they are not reusable credentials.
+
+The raw request bodies and headers are held unredacted in memory so the decoders can analyse them; redaction is applied at display and export time.
 
 ---
 
@@ -62,7 +72,7 @@ The extension does not share any data with any person or organisation, including
 
 ## Exports
 
-If you use the **Export** feature (JSON, Markdown, TXT, or PDF), the exported file is saved to your local device via the standard browser download mechanism. You are responsible for the security of exported files.
+If you use the **Export** feature (JSON, Markdown, TXT, or print-ready HTML), the exported file is saved to your local device via the standard browser download mechanism. Exports apply the redaction policy above. You are responsible for the security of exported files — they still contain URLs, non-secret parameters, decoded claims and SAML assertion contents.
 
 ---
 
@@ -70,11 +80,10 @@ If you use the **Export** feature (JSON, Markdown, TXT, or PDF), the exported fi
 
 | Permission | Why it is needed |
 |---|---|
-| `webRequest` | Observe HTTP request URLs and headers to identify authentication traffic |
+| `webRequest` | Observe HTTP request URLs, headers and request bodies to identify and decode authentication traffic (read-only) |
 | `<all_urls>` | Authentication flows occur across many different domains (identity providers, relying parties, DID resolvers) |
 | `tabs` | Associate captured requests with the correct browser tab |
-| `storage` | Persist user preferences (view mode, pane layout) across sessions |
-| `windows` | Open the extension in a standalone resizable window (popout mode) |
+| `storage` | Declared for upcoming session-state features; not used to store data in this version |
 
 ---
 
@@ -88,6 +97,11 @@ This extension is a developer and security-professional tool. It is not directed
 
 If the data practices described here change materially, this document will be updated and the effective date revised. The current version is always available at:  
 `https://github.com/darrenjrobinson/EntraAuthTracer/blob/main/PRIVACY.md`
+
+| Date | Change |
+|---|---|
+| 8 September 2026 | Describe the redaction policy (UI and exports), the bounded in-memory buffer, `localStorage` preferences (not `chrome.storage`), and the current permission set |
+| 27 March 2026 | Initial policy |
 
 ---
 
