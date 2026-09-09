@@ -39,7 +39,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint \"src/**/*.js\" \"tests/**/*.js\"",
-    "package": "npm run build && web-ext build -s dist -a web-ext-artifacts --overwrite-dest"
+    "package": "npm run build && web-ext build -s dist -a web-ext-artifacts --overwrite-dest",
+    "version": "node scripts/sync-manifest-version.js"
   },
   "devDependencies": {
     "@babel/core": "^7.23.0",

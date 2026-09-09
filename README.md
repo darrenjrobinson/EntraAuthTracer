@@ -282,6 +282,8 @@ This is a fork of [SimpleSAMLphp SAML-tracer](https://github.com/SimpleSAMLphp/S
 4. Ensure lint and tests pass: `npm run lint && npm test` — CI runs the same checks plus a build on every pull request, with coverage thresholds enforced
 5. Submit a pull request
 
+Maintainers: see [docs/RELEASE.md](docs/RELEASE.md) for how a `vX.Y.Z` tag turns into a GitHub Release and a Chrome Web Store / Edge Add-ons publish.
+
 ## License
 
 Licensed under the [BSD-2-Clause License](LICENSE), maintaining compatibility with the upstream SimpleSAMLphp SAML-tracer project.
