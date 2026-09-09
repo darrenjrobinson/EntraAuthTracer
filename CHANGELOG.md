@@ -8,6 +8,14 @@ From 1.1.0 onward, git tags match the manifest version exactly (`v1.1.0`).
 
 ## [Unreleased]
 
+### Added
+- **Release automation** — `.github/workflows/release.yml` builds, tests and packages
+  the extension on every `vX.Y.Z` tag push, creates the GitHub Release with the zip
+  attached, and (once the relevant repo secrets are configured — see
+  `docs/RELEASE.md`) publishes to the Chrome Web Store and Microsoft Edge Add-ons;
+  `npm version` now keeps `manifest.json` in sync with `package.json` via a
+  `scripts/sync-manifest-version.js` lifecycle hook
+
 ## [1.1.0] - 2026-09-08
 
 Hardening release: the test suite now exercises the features the extension advertises

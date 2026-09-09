@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, release and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test -- --ci --coverage
+
+      - name: Verify tag matches package.json / manifest.json
+        run: node scripts/verify-tag-version.js "${{ github.ref_name }}"
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Lint packaged extension
+        # Advisory only: web-ext's linter also validates against Firefox's schema,
+        # where MV3 `background.service_worker` and the missing Firefox-only
+        # `browser_specific_settings.gecko.id` always report as errors for a
+        # Chrome/Edge-only extension like this one — neither is fixable without
+        # breaking Chrome/Edge, so this step must not gate the release.
+        continue-on-error: true
+        run: npx web-ext lint -s dist
+
+      - name: Package zip
+        run: |
+          ZIP_NAME="EntraAuthTracer-${{ github.ref_name }}.zip"
+          (cd dist && zip -r "../${ZIP_NAME}" .)
+          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_ENV"
+
+      - name: Extract release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/extract-changelog.js "$VERSION" > release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Entra Auth Tracer ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: ${{ env.zip_name }}
+
+      - name: Check Chrome Web Store secrets
+        id: chrome_secrets
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+        run: |
+          if [ -n "$CHROME_CLIENT_ID" ] && [ -n "$CHROME_CLIENT_SECRET" ] && [ -n "$CHROME_REFRESH_TOKEN" ] && [ -n "$CHROME_EXTENSION_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to Chrome Web Store
+        if: steps.chrome_secrets.outputs.configured == 'true'
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+        run: bash scripts/publish-chrome.sh "${{ env.zip_name }}"
+
+      - name: Check Edge Add-ons secrets
+        id: edge_secrets
+        env:
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
+        run: |
+          if [ -n "$EDGE_CLIENT_ID" ] && [ -n "$EDGE_API_KEY" ] && [ -n "$EDGE_PRODUCT_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to Edge Add-ons
+        if: steps.edge_secrets.outputs.configured == 'true'
+        env:
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
+        run: bash scripts/publish-edge.sh "${{ env.zip_name }}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Release ${{ github.ref_name }}"
+            echo ""
+            if [ "${{ steps.chrome_secrets.outputs.configured }}" = "true" ]; then
+              echo "- Chrome Web Store: publish step ran (check its log for the result)"
+            else
+              echo "- Chrome Web Store: skipped — CHROME_CLIENT_ID/CHROME_CLIENT_SECRET/CHROME_REFRESH_TOKEN/CHROME_EXTENSION_ID not all set (see docs/RELEASE.md)"
+            fi
+            if [ "${{ steps.edge_secrets.outputs.configured }}" = "true" ]; then
+              echo "- Edge Add-ons: publish step ran (check its log for the result)"
+            else
+              echo "- Edge Add-ons: skipped — EDGE_CLIENT_ID/EDGE_API_KEY/EDGE_PRODUCT_ID not all set (see docs/RELEASE.md)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
