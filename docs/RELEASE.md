@@ -41,6 +41,7 @@ Add these under the repo's **Settings → Secrets and variables → Actions**.
 | Secret | Store | What it is |
 |---|---|---|
 | `CHROME_EXTENSION_ID` | Chrome | The item id from the Chrome Web Store listing URL — already public: `phnebijghhehloikpgohcblcljkaokbh` |
+| `CHROME_PUBLISHER_ID` | Chrome | Your publisher id from the Developer Dashboard — see below, distinct from the extension id |
 | `CHROME_CLIENT_ID` | Chrome | OAuth client id from Google Cloud Console |
 | `CHROME_CLIENT_SECRET` | Chrome | OAuth client secret from Google Cloud Console |
 | `CHROME_REFRESH_TOKEN` | Chrome | Refresh token minted once via a one-time manual OAuth consent |
@@ -50,6 +51,11 @@ Add these under the repo's **Settings → Secrets and variables → Actions**.
 
 ### Chrome Web Store credentials
 
+`scripts/publish-chrome.sh` talks to the Chrome Web Store API **v2**
+(`chromewebstore.googleapis.com`) — the older v1 API
+(`www.googleapis.com/chromewebstore/v1.1`) stops working **2026-10-15**, so v2 is the
+only option for a workflow set up after that date and the only one documented here.
+
 1. In [Google Cloud Console](https://console.cloud.google.com/), create (or reuse) a
    project and enable the **Chrome Web Store API**.
 2. Create an OAuth 2.0 Client ID (application type: **Desktop app**) under
@@ -58,14 +64,19 @@ Add these under the repo's **Settings → Secrets and variables → Actions**.
 3. Mint a refresh token once, by hand: follow Google's current instructions for the
    Chrome Web Store publish API's OAuth flow (search "Chrome Web Store API using OAuth"
    on Google's developer docs — the exact consent-screen click-path changes
-   occasionally, so follow their live doc rather than a copy of it here). The end
-   result is a `refresh_token` value — that's `CHROME_REFRESH_TOKEN`.
+   occasionally, so follow their live doc rather than a copy of it here), requesting
+   the `https://www.googleapis.com/auth/chromewebstore` scope. The end result is a
+   `refresh_token` value — that's `CHROME_REFRESH_TOKEN`.
    - Google's refresh tokens can stop working after 6 months of disuse. Since this repo
      releases somewhat regularly that shouldn't bite, but if `publish-chrome.sh` ever
      starts failing token exchange, just repeat this step to mint a new one.
 4. `CHROME_EXTENSION_ID` is the id already in the
    [Chrome Web Store listing URL](https://chromewebstore.google.com/detail/entra-auth-tracer/phnebijghhehloikpgohcblcljkaokbh):
    `phnebijghhehloikpgohcblcljkaokbh`.
+5. `CHROME_PUBLISHER_ID` is shown under **Publisher → Settings** in the
+   [Developer Dashboard](https://chrome.google.com/webstore/devconsole/) — v2 addresses
+   every item as `publishers/{publisherId}/items/{itemId}`, so this is required even
+   though v1 never needed it.
 
 ### Edge Add-ons credentials
 

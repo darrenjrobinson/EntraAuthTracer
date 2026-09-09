@@ -3,6 +3,12 @@
 # Center Publish API (v1.1 — the only version still supported; v1 retired end of
 # 2024). Requires EDGE_CLIENT_ID, EDGE_API_KEY and EDGE_PRODUCT_ID in the
 # environment. See docs/RELEASE.md for how to obtain them.
+#
+# Per https://learn.microsoft.com/microsoft-edge/extensions/update/api/using-addons-api
+# the upload and publish operations each have their own status-check URL — they are
+# not interchangeable:
+#   upload status:  GET .../submissions/draft/package/operations/{operationId}
+#   publish status: GET .../submissions/operations/{operationId}
 set -euo pipefail
 
 ZIP_PATH="${1:?usage: publish-edge.sh <path-to-zip>}"
@@ -17,35 +23,39 @@ curl_auth() {
   curl -sS -H "Authorization: ApiKey ${EDGE_API_KEY}" -H "X-ClientID: ${EDGE_CLIENT_ID}" "$@"
 }
 
-# Polls an operation id until it reports Succeeded or Failed (up to ~5 minutes).
+# Polls a status URL until it reports Succeeded or Failed (up to ~5 minutes).
 wait_for_operation() {
-  local operation_id="$1"
+  local status_url="$1"
   local response status
   for _ in $(seq 1 30); do
     sleep 10
-    response=$(curl_auth "${API_ROOT}/submissions/operations/${operation_id}")
+    response=$(curl_auth "$status_url")
     status=$(echo "$response" | jq -r '.status // empty')
     case "$status" in
       Succeeded)
         return 0
         ;;
       Failed)
-        echo "Edge Add-ons operation ${operation_id} failed:" >&2
+        echo "Edge Add-ons operation at ${status_url} failed:" >&2
         echo "$response" >&2
         return 1
         ;;
       *)
-        echo "  ...operation ${operation_id} status: ${status:-unknown}, waiting"
+        echo "  ...status: ${status:-unknown}, waiting"
         ;;
     esac
   done
-  echo "Edge Add-ons operation ${operation_id} did not complete in time" >&2
+  echo "Edge Add-ons operation at ${status_url} did not complete in time" >&2
   return 1
 }
 
-# The API returns the operation id in the Location response header.
+# The API returns the operation id in the Location response header. Under
+# `pipefail`, grep finding no match (e.g. an error response with no Location
+# header) would otherwise abort the whole script before the caller's own
+# "did not return an operation id" diagnostic can run — the `|| true` keeps
+# that a clean empty result instead.
 operation_id_from_headers() {
-  grep -i '^location:' | sed -E 's/^[Ll]ocation:[[:space:]]*//' | tr -d '\r\n' | sed -E 's#.*/##'
+  { grep -i '^location:' || true; } | sed -E 's/^[Ll]ocation:[[:space:]]*//' | tr -d '\r\n' | sed -E 's#.*/##'
 }
 
 echo "Uploading ${ZIP_PATH} to Edge Add-ons product ${EDGE_PRODUCT_ID}..."
@@ -62,7 +72,7 @@ if [ -z "$UPLOAD_OPERATION_ID" ]; then
 fi
 
 echo "Waiting for Edge Add-ons upload operation ${UPLOAD_OPERATION_ID}..."
-wait_for_operation "$UPLOAD_OPERATION_ID"
+wait_for_operation "${API_ROOT}/submissions/draft/package/operations/${UPLOAD_OPERATION_ID}"
 
 echo "Publishing Edge Add-ons draft for product ${EDGE_PRODUCT_ID}..."
 NOTES_JSON=$(jq -n --arg notes "Automated release via GitHub Actions." '{notes: $notes}')
@@ -79,6 +89,6 @@ if [ -z "$PUBLISH_OPERATION_ID" ]; then
 fi
 
 echo "Waiting for Edge Add-ons publish operation ${PUBLISH_OPERATION_ID}..."
-wait_for_operation "$PUBLISH_OPERATION_ID"
+wait_for_operation "${API_ROOT}/submissions/operations/${PUBLISH_OPERATION_ID}"
 
 echo "Edge Add-ons: published successfully."

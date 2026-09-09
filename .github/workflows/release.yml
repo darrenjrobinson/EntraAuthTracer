@@ -30,7 +30,10 @@ jobs:
         run: npm test -- --ci --coverage
 
       - name: Verify tag matches package.json / manifest.json
-        run: node scripts/verify-tag-version.js "${{ github.ref_name }}"
+        # $GITHUB_REF_NAME is a shell variable expansion, evaluated by bash at run
+        # time — unlike ${{ github.ref_name }}, it can't be reparsed as shell syntax
+        # even though git itself allows shell metacharacters in tag names.
+        run: node scripts/verify-tag-version.js "$GITHUB_REF_NAME"
 
       - name: Build extension
         run: npm run build
@@ -46,7 +49,7 @@ jobs:
 
       - name: Package zip
         run: |
-          ZIP_NAME="EntraAuthTracer-${{ github.ref_name }}.zip"
+          ZIP_NAME="EntraAuthTracer-${GITHUB_REF_NAME}.zip"
           (cd dist && zip -r "../${ZIP_NAME}" .)
           echo "zip_name=${ZIP_NAME}" >> "$GITHUB_ENV"
 
@@ -69,25 +72,33 @@ jobs:
           CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
           CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
           CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
           CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
         run: |
-          if [ -n "$CHROME_CLIENT_ID" ] && [ -n "$CHROME_CLIENT_SECRET" ] && [ -n "$CHROME_REFRESH_TOKEN" ] && [ -n "$CHROME_EXTENSION_ID" ]; then
+          if [ -n "$CHROME_CLIENT_ID" ] && [ -n "$CHROME_CLIENT_SECRET" ] && [ -n "$CHROME_REFRESH_TOKEN" ] && [ -n "$CHROME_PUBLISHER_ID" ] && [ -n "$CHROME_EXTENSION_ID" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish to Chrome Web Store
+        id: chrome_publish
         if: steps.chrome_secrets.outputs.configured == 'true'
         env:
           CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
           CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
           CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
           CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
         run: bash scripts/publish-chrome.sh "${{ env.zip_name }}"
 
+      # `!cancelled()` from here on: a failed Chrome publish must not suppress Edge's
+      # own attempt (or vice versa) — each store is independent. Without a status
+      # function in the `if:`, GitHub implicitly prepends `success()`, which would
+      # skip every following step once one publish step fails.
       - name: Check Edge Add-ons secrets
         id: edge_secrets
+        if: ${{ !cancelled() }}
         env:
           EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
           EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
@@ -100,7 +111,8 @@ jobs:
           fi
 
       - name: Publish to Edge Add-ons
-        if: steps.edge_secrets.outputs.configured == 'true'
+        id: edge_publish
+        if: ${{ !cancelled() && steps.edge_secrets.outputs.configured == 'true' }}
         env:
           EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
           EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
@@ -109,18 +121,26 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          TAG: ${{ github.ref_name }}
+          CHROME_CONFIGURED: ${{ steps.chrome_secrets.outputs.configured }}
+          CHROME_OUTCOME: ${{ steps.chrome_publish.outcome }}
+          EDGE_CONFIGURED: ${{ steps.edge_secrets.outputs.configured }}
+          EDGE_OUTCOME: ${{ steps.edge_publish.outcome }}
         run: |
+          store_line() {
+            local store="$1" configured="$2" outcome="$3" secrets_hint="$4"
+            if [ "$configured" != "true" ]; then
+              echo "- ${store}: skipped — ${secrets_hint} not all set (see docs/RELEASE.md)"
+            elif [ "$outcome" = "success" ]; then
+              echo "- ${store}: published successfully"
+            else
+              echo "- ${store}: publish step ${outcome:-did not run} — check its log"
+            fi
+          }
           {
-            echo "## Release ${{ github.ref_name }}"
+            echo "## Release ${TAG}"
             echo ""
-            if [ "${{ steps.chrome_secrets.outputs.configured }}" = "true" ]; then
-              echo "- Chrome Web Store: publish step ran (check its log for the result)"
-            else
-              echo "- Chrome Web Store: skipped — CHROME_CLIENT_ID/CHROME_CLIENT_SECRET/CHROME_REFRESH_TOKEN/CHROME_EXTENSION_ID not all set (see docs/RELEASE.md)"
-            fi
-            if [ "${{ steps.edge_secrets.outputs.configured }}" = "true" ]; then
-              echo "- Edge Add-ons: publish step ran (check its log for the result)"
-            else
-              echo "- Edge Add-ons: skipped — EDGE_CLIENT_ID/EDGE_API_KEY/EDGE_PRODUCT_ID not all set (see docs/RELEASE.md)"
-            fi
+            store_line "Chrome Web Store" "$CHROME_CONFIGURED" "$CHROME_OUTCOME" "CHROME_CLIENT_ID/CHROME_CLIENT_SECRET/CHROME_REFRESH_TOKEN/CHROME_PUBLISHER_ID/CHROME_EXTENSION_ID"
+            store_line "Edge Add-ons" "$EDGE_CONFIGURED" "$EDGE_OUTCOME" "EDGE_CLIENT_ID/EDGE_API_KEY/EDGE_PRODUCT_ID"
           } >> "$GITHUB_STEP_SUMMARY"
