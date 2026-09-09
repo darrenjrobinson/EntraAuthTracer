@@ -90,7 +90,8 @@ jobs:
           CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
           CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
           CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
-        run: bash scripts/publish-chrome.sh "${{ env.zip_name }}"
+          ZIP_NAME: ${{ env.zip_name }}
+        run: bash scripts/publish-chrome.sh "$ZIP_NAME"
 
       # `!cancelled()` from here on: a failed Chrome publish must not suppress Edge's
       # own attempt (or vice versa) — each store is independent. Without a status
@@ -117,7 +118,8 @@ jobs:
           EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
           EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
           EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
-        run: bash scripts/publish-edge.sh "${{ env.zip_name }}"
+          ZIP_NAME: ${{ env.zip_name }}
+        run: bash scripts/publish-edge.sh "$ZIP_NAME"
 
       - name: Summary
         if: always()
