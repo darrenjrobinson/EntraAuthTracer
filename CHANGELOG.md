@@ -15,6 +15,11 @@ From 1.1.0 onward, git tags match the manifest version exactly (`v1.1.0`).
   `docs/RELEASE.md`) publishes to the Chrome Web Store and Microsoft Edge Add-ons;
   `npm version` now keeps `manifest.json` in sync with `package.json` via a
   `scripts/sync-manifest-version.js` lifecycle hook
+- **WebMCP test harness** (`scripts/webmcp-harness.html` + `scripts/serve-harness.mjs`)
+  — a local dev tool for discovering and executing the WebMCP tools over a trusted
+  `https://localhost` connection (cert/key are generated locally with `mkcert`, never
+  committed). Not part of the packaged extension — `scripts/` is never copied into
+  `dist/`. See the README's "Try it locally" section under WebMCP.
 
 ## [1.2.0] - 2026-09-08
 

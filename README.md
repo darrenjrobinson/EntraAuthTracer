@@ -180,6 +180,28 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 - Captures live in the background worker's memory; if the browser stops the worker the tools return an explicit empty-state note until a new flow is captured.
 - Pages whose Permissions-Policy disables the `tools` feature cannot host the registration; the popup reports this.
 
+### Try it locally: the WebMCP test harness
+
+`scripts/webmcp-harness.html` is a developer tool for exercising the six tools above
+without wiring up your own AI agent — pick a discovered tool, edit its JSON
+arguments, run it, and see the result. It needs Node and a trusted local HTTPS
+certificate (the extension refuses to arm any tab that isn't `https://`), which the
+repo does **not** ship — generate your own with [mkcert](https://github.com/FiloSottile/mkcert):
+
+```
+winget install FiloSottile.mkcert
+mkcert -install                     # installs a local CA, once
+cd scripts && mkcert localhost      # writes localhost.pem + localhost-key.pem, gitignored
+node scripts/serve-harness.mjs      # serves scripts/ over https://127.0.0.1:8443, loopback only
+```
+
+Then open `https://localhost:8443/webmcp-harness.html` and click **Enable WebMCP** in
+the extension popup with that tab focused. The harness also has an optional "AI
+Analysis" tab that calls the Anthropic or OpenAI API **directly from your browser**
+using an API key you type in yourself (kept only in `sessionStorage`) — it's clearly
+marked dev-only in the UI, and anything you hand it leaves your machine for that
+provider, so treat it the same way you'd treat pasting captured tokens into a chat.
+
 ## Supported Authentication Flows
 
 ### OAuth 2.x / OIDC
