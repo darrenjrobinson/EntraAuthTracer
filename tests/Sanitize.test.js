@@ -204,6 +204,19 @@ describe('Sanitize', () => {
       expect(new URL(out).searchParams.get('id_token_hint')).toMatch(/truncated JWT/);
     });
 
+    it('redacts embedded URL credentials before any display or copy', () => {
+      const base = new URL('https://idp.example.com/token?client_id=app&client_secret=s3cret');
+      base.username = 'user';
+      base.password = 'pass';
+      const out = Sanitize.redactUrl(base.toString());
+      const parsed = new URL(out);
+      expect(parsed.username).toBe('REDACTED');
+      expect(parsed.password).toBe('REDACTED');
+      expect(parsed.searchParams.get('client_secret')).toBe('[REDACTED]');
+      expect(out).not.toContain('user');
+      expect(out).not.toContain('s3cret');
+    });
+
     it('returns the input unchanged when nothing needs redacting or it is not a URL', () => {
       const clean = 'https://x.example.com/a?b=c';
       expect(Sanitize.redactUrl(clean)).toBe(clean);

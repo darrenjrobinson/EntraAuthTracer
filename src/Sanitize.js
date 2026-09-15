@@ -213,6 +213,13 @@ class Sanitize {
       return urlString;
     }
     let changed = false;
+
+    if (url.username || url.password) {
+      url.username = 'REDACTED';
+      url.password = 'REDACTED';
+      changed = true;
+    }
+
     for (const key of Array.from(url.searchParams.keys())) {
       const kind = Sanitize.classifyKey(key);
       if (kind === 'plain') continue;
