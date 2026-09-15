@@ -195,6 +195,15 @@ cd scripts && mkcert localhost      # writes localhost.pem + localhost-key.pem, 
 node scripts/serve-harness.mjs      # serves scripts/ over https://127.0.0.1:8443, loopback only
 ```
 
+**The browser flag from "Browser support and limitations" above is required here too** —
+`document.modelContext` won't exist on the harness page without it. Turn on
+`chrome://flags/#enable-webmcp-testing` (or `edge://flags/#enable-webmcp-testing`) and
+restart the browser before opening the harness; the extension's own
+`EXTENSION_TRIAL_TOKENS` origin-trial build flag only covers the extension's own
+pages, not the harness's `https://localhost:8443` origin, so it won't substitute for
+this. If the flag isn't on, the harness's status line says so explicitly: *"No
+modelContext — needs Edge 147+ or Chrome 149 (Origin Trial)"*.
+
 Then open `https://localhost:8443/webmcp-harness.html` and click **Enable WebMCP** in
 the extension popup with that tab focused. The harness also has an optional "AI
 Analysis" tab that calls the Anthropic or OpenAI API **directly from your browser**
