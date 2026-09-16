@@ -184,9 +184,10 @@ Captures and decodes the full Verified ID lifecycle — issuance, presentation/v
 
 `scripts/webmcp-harness.html` is a developer tool for exercising the six tools above
 without wiring up your own AI agent — pick a discovered tool, edit its JSON
-arguments, run it, and see the result. It needs Node and a trusted local HTTPS
-certificate (the extension refuses to arm any tab that isn't `https://`), which the
-repo does **not** ship — generate your own with [mkcert](https://github.com/FiloSottile/mkcert):
+arguments, run it, and see the result. It needs [Node 18+](https://nodejs.org/) (20 LTS
+or newer recommended — that's what CI tests) and a trusted local HTTPS certificate
+(the extension refuses to arm any tab that isn't `https://`), which the repo does
+**not** ship — generate your own with [mkcert](https://github.com/FiloSottile/mkcert):
 
 ```
 winget install FiloSottile.mkcert
