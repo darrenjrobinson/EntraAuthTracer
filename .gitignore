@@ -67,3 +67,6 @@ web-ext-artifacts/
 *.pem
 # graphify knowledge-graph output (local tool)
 graphify-out/
+
+# Local blog drafts (not part of the repo)
+blog/

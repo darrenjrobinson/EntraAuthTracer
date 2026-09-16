@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import EntraAuthTracerUI from '../src/ui.js';
 import Exporters from '../src/Exporters.js';
+import { UNSUPPORTED_MESSAGE } from '../src/webmcp/protocol.js';
 import { makeRequest } from './helpers.js';
 
 const HTML = fs.readFileSync(path.join(__dirname, '../src/ui.html'), 'utf8');
@@ -44,11 +45,16 @@ function oauthFlowFixtures() {
 
 let state;
 
+const IDLE_WEBMCP = { phase: 'idle', armed: false, lastError: null, supported: null };
+const ARMED_WEBMCP = { phase: 'armed', armed: true, host: 'portal.azure.com', origin: 'https://portal.azure.com', toolCount: 6, lastError: null, supported: true };
+
 function installChromeMock(requests) {
-  state = { requests };
+  state = { requests, webmcp: { ...IDLE_WEBMCP }, nextEnable: { ...ARMED_WEBMCP } };
   chrome.runtime.sendMessage.mockImplementation((msg, cb) => {
-    if (msg.action === 'getState') { if (cb) cb({ requests: state.requests, deviceCodeCorrelation: {}, fido2Sessions: [], isActive: true }); }
+    if (msg.action === 'getState') { if (cb) cb({ requests: state.requests, deviceCodeCorrelation: {}, fido2Sessions: [], isActive: true, webmcp: state.webmcp }); }
     else if (msg.action === 'clearData') { state.requests = []; if (cb) cb({ success: true }); }
+    else if (msg.action === 'webmcp:enable') { state.webmcp = { ...state.nextEnable }; if (cb) cb({ ok: state.webmcp.armed, status: state.webmcp, error: state.webmcp.lastError }); }
+    else if (msg.action === 'webmcp:disable') { state.webmcp = { ...IDLE_WEBMCP }; if (cb) cb({ ok: true, status: state.webmcp }); }
     else if (cb) cb({ success: true });
   });
 }
@@ -317,5 +323,83 @@ describe('EntraAuthTracerUI (popup smoke tests)', () => {
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ action: 'clearData' }, expect.any(Function));
     expect(ui.currentRequests).toEqual([]);
     expect(document.querySelector('#requestList .no-requests')).not.toBeNull();
+  });
+
+  // ─── WebMCP mode control ──────────────────────────────────────────────────
+
+  describe('WebMCP mode', () => {
+    it('renders the Enable control idle with the banner hidden', async () => {
+      await mount([]);
+      const btn = document.getElementById('webmcpBtn');
+      expect(btn.textContent).toBe('Enable WebMCP');
+      expect(btn.getAttribute('aria-pressed')).toBe('false');
+      expect(btn.disabled).toBe(false);
+      expect(document.getElementById('webmcpBanner').hidden).toBe(true);
+    });
+
+    it('enables WebMCP mode and shows the trust banner with host and tool count', async () => {
+      await mount(fixtures());
+      document.getElementById('webmcpBtn').click();
+      await flush();
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ action: 'webmcp:enable' }, expect.any(Function));
+      const btn = document.getElementById('webmcpBtn');
+      expect(btn.textContent).toBe('Disable WebMCP');
+      expect(btn.getAttribute('aria-pressed')).toBe('true');
+      expect(btn.classList.contains('webmcp-active')).toBe(true);
+      const banner = document.getElementById('webmcpBanner');
+      expect(banner.hidden).toBe(false);
+      expect(banner.classList.contains('webmcp-banner--active')).toBe(true);
+      expect(document.getElementById('webmcpBannerText').textContent)
+        .toBe('WebMCP mode active on portal.azure.com — AI agents in this tab can read captured tokens. 6 tools registered.');
+      expect(document.getElementById('webmcpBannerAction').textContent).toBe('Disable');
+    });
+
+    it('disables from the banner action and returns to idle', async () => {
+      await mount(fixtures());
+      document.getElementById('webmcpBtn').click();
+      await flush();
+      document.getElementById('webmcpBannerAction').click();
+      await flush();
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ action: 'webmcp:disable' }, expect.any(Function));
+      expect(document.getElementById('webmcpBtn').textContent).toBe('Enable WebMCP');
+      expect(document.getElementById('webmcpBtn').getAttribute('aria-pressed')).toBe('false');
+      expect(document.getElementById('webmcpBanner').hidden).toBe(true);
+    });
+
+    it('shows the unsupported-browser message and lets the user dismiss it', async () => {
+      await mount([]);
+      state.nextEnable = { phase: 'idle', armed: false, lastError: UNSUPPORTED_MESSAGE, supported: false };
+      document.getElementById('webmcpBtn').click();
+      await flush();
+      const banner = document.getElementById('webmcpBanner');
+      expect(banner.hidden).toBe(false);
+      expect(banner.classList.contains('webmcp-banner--warn')).toBe(true);
+      expect(document.getElementById('webmcpBannerText').textContent).toBe(UNSUPPORTED_MESSAGE);
+      expect(document.getElementById('webmcpBannerAction').textContent).toBe('Dismiss');
+      expect(document.getElementById('webmcpBtn').textContent).toBe('Enable WebMCP');
+
+      document.getElementById('webmcpBannerAction').click();
+      expect(banner.hidden).toBe(true);
+      // the same error stays dismissed across polls
+      jest.advanceTimersByTime(1000);
+      await flush();
+      expect(banner.hidden).toBe(true);
+    });
+
+    it('reflects status changes pushed by the background poll (e.g. disarmed on navigation)', async () => {
+      await mount([]);
+      state.webmcp = { ...ARMED_WEBMCP, host: 'myapps.microsoft.com', toolCount: 1 };
+      jest.advanceTimersByTime(1000);
+      await flush();
+      expect(document.getElementById('webmcpBtn').textContent).toBe('Disable WebMCP');
+      expect(document.getElementById('webmcpBannerText').textContent).toContain('myapps.microsoft.com');
+      expect(document.getElementById('webmcpBannerText').textContent).toContain('1 tool registered');
+
+      state.webmcp = { ...IDLE_WEBMCP };
+      jest.advanceTimersByTime(1000);
+      await flush();
+      expect(document.getElementById('webmcpBtn').textContent).toBe('Enable WebMCP');
+      expect(document.getElementById('webmcpBanner').hidden).toBe(true);
+    });
   });
 });

@@ -7,6 +7,7 @@
  */
 
 import SAMLTrace from './SAMLTrace.js';
+import WebMcpController from './webmcp/WebMcpController.js';
 
 // Extension state
 const extensionState = {
@@ -17,6 +18,14 @@ const extensionState = {
   badgeCount: 0
 };
 
+// WebMCP mode — exposes captured data to AI agents in one user-selected tab
+const webmcp = new WebMcpController({
+  chrome,
+  getRequests: () => extensionState.requests
+});
+// Tab listeners must be registered synchronously at service-worker top level
+webmcp.attachListeners();
+
 // ─── Badge management ────────────────────────────────────────────────────────
 
 /**
@@ -26,6 +35,7 @@ const extensionState = {
 function onNewAuthRequest() {
   extensionState.badgeCount++;
   chrome.action.setBadgeText({ text: String(extensionState.badgeCount) });
+  webmcp.notifySessionsChanged();
 }
 
 /**
@@ -54,7 +64,10 @@ function initializeExtension() {
   // Set up extension lifecycle handlers
   chrome.runtime.onStartup.addListener(onExtensionStartup);
   chrome.runtime.onSuspend.addListener(onExtensionSuspend);
-  
+
+  // Re-validate any WebMCP armed tab persisted before a service-worker restart
+  webmcp.ensureRestored();
+
   console.log('Entra Auth Tracer: Ready');
 }
 
@@ -88,12 +101,22 @@ function getExtensionState() {
     requests: extensionState.requests,
     deviceCodeCorrelation: Object.fromEntries(extensionState.deviceCodeCorrelation),
     fido2Sessions: extensionState.fido2Sessions,
-    isActive: extensionState.isActive
+    isActive: extensionState.isActive,
+    webmcp: webmcp.status()
   };
 }
 
-// Message handling for popup communication
+// Message handling for popup and WebMCP bridge communication
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // WebMCP actions are asynchronous — keep the channel open and respond later
+  if (request && typeof request.action === 'string' && request.action.startsWith('webmcp:')) {
+    webmcp.handleMessage(request, sender).then(
+      (response) => sendResponse(response),
+      (err) => sendResponse({ ok: false, code: 'internal', error: err && err.message ? err.message : String(err) })
+    );
+    return true;
+  }
+
   switch (request.action) {
     case 'getState':
       sendResponse(getExtensionState());
@@ -103,6 +126,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       extensionState.deviceCodeCorrelation.clear();
       extensionState.fido2Sessions = [];
       resetBadge();
+      webmcp.notifySessionsChanged();
       sendResponse({ success: true });
       break;
     case 'resetBadge':
@@ -130,6 +154,7 @@ if (typeof module !== 'undefined' && module.exports) {
     onNewAuthRequest,
     onExtensionStartup,
     onExtensionSuspend,
-    extensionState
+    extensionState,
+    webmcp
   };
 }

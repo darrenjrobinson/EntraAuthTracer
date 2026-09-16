@@ -1651,3 +1651,70 @@ body.no-select * {
   font-weight: 600;
   cursor: default;
 }
+/* ─── WebMCP mode ──────────────────────────────────────────────────────────── */
+
+.btn.webmcp-active {
+  border-color: var(--primary-blue);
+  color: var(--primary-blue);
+  font-weight: 600;
+}
+
+.webmcp-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.webmcp-banner[hidden] {
+  display: none;
+}
+
+.webmcp-banner--active {
+  background: rgba(0, 120, 212, 0.12);
+}
+
+.webmcp-banner--warn {
+  background: rgba(255, 140, 0, 0.14);
+}
+
+.webmcp-banner #webmcpBannerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.webmcp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.webmcp-banner--active .webmcp-dot {
+  background: var(--primary-blue);
+}
+
+.webmcp-banner--warn .webmcp-dot {
+  background: var(--warning-orange);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .webmcp-banner--active .webmcp-dot {
+    animation: webmcp-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes webmcp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.btn-small {
+  padding: 2px 8px;
+  font-size: var(--font-size-sm);
+}

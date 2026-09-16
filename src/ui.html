@@ -20,6 +20,7 @@
             <path d="M1.5 1h5a.5.5 0 0 1 0 1H2v11h11V9.5a.5.5 0 0 1 1 0V13.5a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-12a.5.5 0 0 1 .5-.5zm7.5 0h5.5a.5.5 0 0 1 .5.5V7a.5.5 0 0 1-1 0V2.707L8.354 8.354a.5.5 0 0 1-.708-.708L13.293 2H9a.5.5 0 0 1 0-1z"/>
           </svg>
         </button>
+        <button id="webmcpBtn" class="btn btn-secondary" title="Expose captured auth data (read-only) to AI agents in the active https tab" aria-pressed="false">Enable WebMCP</button>
         <button id="clearBtn" class="btn btn-secondary" title="Clear all requests">Clear</button>
         <div class="export-wrapper">
           <button id="exportBtn" class="btn btn-primary" title="Export traces" aria-haspopup="true" aria-expanded="false">
@@ -75,6 +76,13 @@
           <option value="pending">Pending</option>
         </select>
       </div>
+    </div>
+
+    <!-- WebMCP mode banner — visible while an AI agent can read captured data, or after an enable error -->
+    <div id="webmcpBanner" class="webmcp-banner" role="status" aria-live="polite" hidden>
+      <span class="webmcp-dot" aria-hidden="true"></span>
+      <span id="webmcpBannerText"></span>
+      <button id="webmcpBannerAction" class="btn btn-secondary btn-small" type="button">Disable</button>
     </div>
 
     <!-- Main Content -->

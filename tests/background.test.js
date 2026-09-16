@@ -15,6 +15,19 @@ jest.mock('../src/SAMLTrace.js', () => ({
   }
 }));
 
+// The WebMCP controller is exercised in its own suite; here we only verify wiring.
+const mockController = {
+  attachListeners: jest.fn(),
+  ensureRestored: jest.fn(async () => {}),
+  status: jest.fn(() => ({ phase: 'idle', armed: false })),
+  handleMessage: jest.fn(async (request) => ({ ok: true, echoed: request.action })),
+  notifySessionsChanged: jest.fn()
+};
+jest.mock('../src/webmcp/WebMcpController.js', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => mockController)
+}));
+
 // Capture the onMessage listener at require-time by storing it from the mock.
 // background.js calls chrome.runtime.onMessage.addListener(fn) once at load.
 // We intercept it before requiring the module.
@@ -36,6 +49,10 @@ chrome.runtime.onSuspend.addListener.mockImplementation((fn) => {
 // Import the background module — it runs initializeExtension() as a
 // side-effect, which exercises badge setup and SAMLTrace wiring.
 const bg = require('../src/background.js');
+
+// Load-time wiring happens once at require(); snapshot it before beforeEach clears the mocks.
+const attachListenersCallsAtLoad = mockController.attachListeners.mock.calls.length;
+const ensureRestoredCallsAtLoad = mockController.ensureRestored.mock.calls.length;
 
 describe('background.js', () => {
   beforeEach(() => {
@@ -146,6 +163,50 @@ describe('background.js', () => {
       expect(sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({ success: false, error: 'Unknown action' })
       );
+    });
+
+    it('should include the WebMCP status in getState', () => {
+      const sendResponse = sendMessage('getState');
+      expect(sendResponse).toHaveBeenCalledWith(expect.objectContaining({ webmcp: { phase: 'idle', armed: false } }));
+    });
+
+    it('should notify the WebMCP controller when data is cleared', () => {
+      sendMessage('clearData');
+      expect(mockController.notifySessionsChanged).toHaveBeenCalled();
+    });
+  });
+
+  // ─── WebMCP routing ───────────────────────────────────────────────────────
+
+  describe('WebMCP message routing', () => {
+    async function flush() { for (let i = 0; i < 4; i++) await Promise.resolve(); }
+
+    it.each(['webmcp:enable', 'webmcp:disable', 'webmcp:status', 'webmcp:call'])('routes %s to the controller and keeps the channel open', async (action) => {
+      const sendResponse = jest.fn();
+      const sender = { tab: { id: 7 } };
+      const keepOpen = capturedMessageHandler({ action, tool: 'list_auth_sessions', args: {} }, sender, sendResponse);
+      expect(keepOpen).toBe(true);
+      expect(mockController.handleMessage).toHaveBeenCalledWith(expect.objectContaining({ action }), sender);
+      await flush();
+      expect(sendResponse).toHaveBeenCalledWith({ ok: true, echoed: action });
+    });
+
+    it('converts a controller rejection into an internal error response', async () => {
+      mockController.handleMessage.mockImplementationOnce(async () => { throw new Error('boom'); });
+      const sendResponse = jest.fn();
+      capturedMessageHandler({ action: 'webmcp:status' }, {}, sendResponse);
+      await flush();
+      expect(sendResponse).toHaveBeenCalledWith({ ok: false, code: 'internal', error: 'boom' });
+    });
+
+    it('attaches tab listeners at load and restores state during initialisation', () => {
+      expect(attachListenersCallsAtLoad).toBe(1);
+      expect(ensureRestoredCallsAtLoad).toBe(1);
+    });
+
+    it('notifies the controller of every new capture', () => {
+      bg.onNewAuthRequest();
+      expect(mockController.notifySessionsChanged).toHaveBeenCalled();
     });
   });
 

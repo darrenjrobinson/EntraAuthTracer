@@ -1125,6 +1125,15 @@ describe('SAMLTrace', () => {
       expect(detect('https://oauth2.googleapis.com/token', 'POST', { formData: { grant_type: ['refresh_token'] } })).toBe('refresh_token');
       expect(detect('https://securetoken.googleapis.com/v1/token?key=AIza', 'POST')).toBe('oauth_token');
     });
+
+    it('stamps the detected provider on every captured request', () => {
+      const entra = samltrace.analyzeRequest(makeDetails('https://login.microsoftonline.com/t/oauth2/v2.0/authorize?client_id=x'));
+      expect(entra.provider).toEqual({ id: 'entra', label: 'Microsoft Entra ID', hostname: 'login.microsoftonline.com' });
+      const okta = samltrace.analyzeRequest(makeDetails('https://contoso.okta.com/oauth2/v1/token', 'POST'));
+      expect(okta.provider.id).toBe('okta');
+      const generic = samltrace.analyzeRequest(makeDetails('https://idp.example.com/saml2/sso?SAMLRequest=abc'));
+      expect(generic.provider).toEqual({ id: 'unknown', label: 'idp.example.com', hostname: 'idp.example.com' });
+    });
   });
 
   describe('generateRequestId format', () => {

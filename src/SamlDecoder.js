@@ -124,6 +124,9 @@ class SamlDecoder {
    * Parse SAML XML into a structured result object.
    */
   static parse(xmlText) {
+    // Service workers have no DOMParser — fall back to the regex-based parser
+    if (typeof DOMParser === 'undefined') return SamlDecoder.parseLite(xmlText);
+
     const parser = new DOMParser();
     const doc = parser.parseFromString(xmlText, 'application/xml');
 
@@ -268,6 +271,173 @@ class SamlDecoder {
       inResponseTo: root.getAttribute('InResponseTo'),
       status: SamlDecoder.parseStatus(doc),
     };
+  }
+
+  // ─── Lite (regex) parser — for contexts without DOMParser ──────────────────
+
+  /**
+   * Parse SAML XML without a DOM implementation (used in the background service
+   * worker). Produces the same shape as parse() for the fields the UI, the
+   * security assessment and the tool surface rely on, tagged `parser: 'lite'`.
+   * It is intentionally tolerant: unknown structure yields nulls, never throws.
+   */
+  static parseLite(xmlText) {
+    const text = String(xmlText || '');
+    const NAME = '(?:[\\w.-]+:)?';
+    const rootMatch = new RegExp(`<${NAME}(AuthnRequest|Response|LogoutRequest|LogoutResponse|Assertion|RequestSecurityTokenResponse)\\b([^>]*)>`).exec(text);
+    if (!rootMatch) {
+      return { error: 'XML parse failed: no recognised SAML root element', parser: 'lite' };
+    }
+    const messageType = rootMatch[1];
+    const rootAttrs = rootMatch[2];
+
+    const attr = (attrs, name) => {
+      const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*"([^"]*)"`).exec(attrs || '');
+      return m ? m[1] : null;
+    };
+    const firstAttrs = (src, local) => {
+      const m = new RegExp(`<${NAME}${local}\\b([^>]*)>`).exec(src || '');
+      return m ? m[1] : null;
+    };
+    const firstText = (src, local) => {
+      const m = new RegExp(`<${NAME}${local}\\b[^>]*>([^<]*)<`).exec(src || '');
+      return m ? m[1].trim() : null;
+    };
+    const allTexts = (src, local) => {
+      const out = [];
+      const re = new RegExp(`<${NAME}${local}\\b[^>]*>([^<]*)<`, 'g');
+      let m;
+      while ((m = re.exec(src || '')) !== null) out.push(m[1].trim());
+      return out;
+    };
+    const section = (src, local) => {
+      const m = new RegExp(`<${NAME}${local}\\b[^>]*>[\\s\\S]*?<\\/${NAME}${local}>`).exec(src || '');
+      return m ? m[0] : null;
+    };
+    const hasElement = (src, local) => new RegExp(`<${NAME}${local}\\b`).test(src || '');
+    // Namespace bound to an element's prefix (or the default namespace when it has
+    // none): a declaration on the tag itself wins, otherwise the nearest preceding
+    // declaration in the document. Approximate scoping, but it keeps the fallback
+    // parser from counting <Signature> elements outside XMLDSig (parse() is exact).
+    const namespaceOf = (prefix, tagAttrs, tagText) => {
+      const decl = prefix ? `xmlns:${prefix}` : 'xmlns';
+      const own = new RegExp(`(?:^|\\s)${decl}\\s*=\\s*"([^"]*)"`).exec(tagAttrs || '');
+      if (own) return own[1];
+      const pos = text.indexOf(tagText);
+      const before = pos >= 0 ? text.slice(0, pos) : text;
+      const re = new RegExp(`\\s${decl}\\s*=\\s*"([^"]*)"`, 'g');
+      let ns = null;
+      let m;
+      while ((m = re.exec(before)) !== null) ns = m[1];
+      return ns;
+    };
+    // True only when `src` contains a <Signature> in the XML Signature namespace —
+    // the same rule hasDirectChild(el, 'Signature', XMLDSIG_NS) applies in parse().
+    const hasXmldsigSignature = (src) => {
+      const re = /<(?:([\w.-]+):)?Signature\b([^>]*)>/g;
+      let m;
+      while ((m = re.exec(src || '')) !== null) {
+        if (namespaceOf(m[1] || null, m[2], m[0]) === SamlDecoder.XMLDSIG_NS) return true;
+      }
+      return false;
+    };
+
+    const assertionXml = messageType === 'Response' ? section(text, 'Assertion') : null;
+    const outsideAssertion = assertionXml ? text.replace(assertionXml, '') : text;
+
+    const parseStatus = (src) => {
+      const attrs = firstAttrs(src, 'StatusCode');
+      if (attrs === null) return null;
+      const fullCode = attr(attrs, 'Value') || '';
+      return {
+        code: fullCode.split(':').pop(),
+        fullCode,
+        isSuccess: fullCode === SamlDecoder.STATUS_SUCCESS,
+        message: firstText(src, 'StatusMessage')
+      };
+    };
+
+    const base = {
+      messageType,
+      parser: 'lite',
+      id: attr(rootAttrs, 'ID'),
+      version: attr(rootAttrs, 'Version'),
+      issueInstant: attr(rootAttrs, 'IssueInstant'),
+      destination: attr(rootAttrs, 'Destination'),
+      issuer: firstText(outsideAssertion, 'Issuer'),
+      messageSigned: hasXmldsigSignature(outsideAssertion),
+      hasEncryptedAssertion: hasElement(text, 'EncryptedAssertion')
+    };
+
+    switch (messageType) {
+      case 'AuthnRequest': {
+        const nip = firstAttrs(text, 'NameIDPolicy');
+        const rac = firstAttrs(text, 'RequestedAuthnContext');
+        return {
+          ...base,
+          assertionConsumerServiceURL: attr(rootAttrs, 'AssertionConsumerServiceURL'),
+          protocolBinding: attr(rootAttrs, 'ProtocolBinding'),
+          forceAuthn: attr(rootAttrs, 'ForceAuthn'),
+          isPassive: attr(rootAttrs, 'IsPassive'),
+          providerName: attr(rootAttrs, 'ProviderName'),
+          nameIDPolicy: nip !== null ? { format: attr(nip, 'Format'), allowCreate: attr(nip, 'AllowCreate') } : null,
+          requestedAuthnContext: rac !== null ? {
+            comparison: attr(rac, 'Comparison'),
+            classRefs: allTexts(section(text, 'RequestedAuthnContext'), 'AuthnContextClassRef')
+          } : null
+        };
+      }
+      case 'Response': {
+        let assertion = null;
+        if (assertionXml) {
+          const aAttrs = firstAttrs(assertionXml, 'Assertion');
+          const nameIdAttrs = firstAttrs(assertionXml, 'NameID');
+          const condAttrs = firstAttrs(assertionXml, 'Conditions');
+          const stmtAttrs = firstAttrs(assertionXml, 'AuthnStatement');
+          const attributes = {};
+          const attrRe = new RegExp(`<${NAME}Attribute\\b([^>]*)>([\\s\\S]*?)<\\/${NAME}Attribute>`, 'g');
+          let m;
+          while ((m = attrRe.exec(assertionXml)) !== null) {
+            const name = attr(m[1], 'Name') || attr(m[1], 'FriendlyName') || '(unknown)';
+            attributes[name] = allTexts(m[2], 'AttributeValue');
+          }
+          assertion = {
+            id: attr(aAttrs, 'ID'),
+            issueInstant: attr(aAttrs, 'IssueInstant'),
+            signed: hasXmldsigSignature(assertionXml),
+            issuer: firstText(assertionXml, 'Issuer'),
+            nameID: nameIdAttrs !== null ? {
+              value: firstText(assertionXml, 'NameID'),
+              format: attr(nameIdAttrs, 'Format'),
+              spNameQualifier: attr(nameIdAttrs, 'SPNameQualifier')
+            } : null,
+            conditions: condAttrs !== null ? {
+              notBefore: attr(condAttrs, 'NotBefore'),
+              notOnOrAfter: attr(condAttrs, 'NotOnOrAfter'),
+              audiences: allTexts(section(assertionXml, 'Conditions'), 'Audience')
+            } : null,
+            authnStatement: stmtAttrs !== null ? {
+              authnInstant: attr(stmtAttrs, 'AuthnInstant'),
+              sessionIndex: attr(stmtAttrs, 'SessionIndex'),
+              authnContextClassRef: firstText(section(assertionXml, 'AuthnStatement'), 'AuthnContextClassRef')
+            } : null,
+            attributes
+          };
+        }
+        return {
+          ...base,
+          inResponseTo: attr(rootAttrs, 'InResponseTo'),
+          status: parseStatus(outsideAssertion),
+          assertion
+        };
+      }
+      case 'LogoutRequest':
+        return { ...base, nameID: firstText(text, 'NameID'), sessionIndex: firstText(text, 'SessionIndex') };
+      case 'LogoutResponse':
+        return { ...base, inResponseTo: attr(rootAttrs, 'InResponseTo'), status: parseStatus(text) };
+      default:
+        return base;
+    }
   }
 
   // ─── Security assessment ───────────────────────────────────────────────────
